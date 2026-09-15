@@ -1,0 +1,113 @@
+# Nigoria — Roblox Lua Obfuscator + Discord Bot
+
+A layered Lua/Luau **source obfuscator** whose output still runs under Roblox
+executors (the loader uses `loadstring`/`load`), plus a **Discord bot** that
+gates access through Free and Pro panels.
+
+Obfuscated output is always prefixed with:
+
+```lua
+--[[ Skid Optimzation v1.0]]
+```
+
+## What it does
+
+The obfuscator parses Lua 5.1 + common Luau (it understands `continue`, type
+annotations, generics and compound assignment). If a script uses something the
+parser can't represent, it automatically falls back to packing the raw source,
+so obfuscation always produces runnable output.
+
+### Passes
+
+| Feature (panel label)        | Implementation |
+|------------------------------|----------------|
+| Base / Good Obfuscation      | Scope-aware local renaming to opaque `l/I` identifiers + integer-literal arithmetic obfuscation. Globals are left intact so Roblox APIs keep working. |
+| Control Flow                 | Control-flow flattening: straight-line blocks become a dispatcher `while` loop driven by an opaque state variable, with cases emitted in shuffled order. |
+| Static Environment           | String-literal encryption: every string moves into an encoded byte pool decoded at runtime (position-dependent additive cipher, no bitwise ops). |
+| Hardcore Globals             | Every global reference is routed through a captured environment table (`ENV["print"]` …); combined with string encryption the names are hidden too. |
+| VM Compression               | Payload is LZW-compressed, ciphered, embedded in a loader that reconstructs and `loadstring`s it. |
+| Advanced VM Compression / Intense VM Structure | Additional nested loader layers, each with a distinct cipher. |
+| Virtualization               | The decode/run step is executed by a small opcode-dispatched bytecode VM. |
+| Optimizations                | Constant folding and trivial dead-code removal. |
+
+> This is obfuscation, not cryptography. The goal is to make scripts hard to
+> read and tamper with, not to provide secrecy against a determined analyst.
+
+### Tiers
+
+* **Free:** Base Obfuscation, Control Flow, VM Compression, and optional
+  Optimization. Limited to **3 obfuscations per day** per user.
+* **Pro:** Good Obfuscation, Static Environment, Hardcore Globals, Intense VM
+  Structure, Advanced VM Compression, Control Flow, plus optional
+  Virtualization and Optimizations. Unlimited. Requires the Pro role.
+
+## CLI
+
+```bash
+python -m obfuscator.cli input.lua -o out.lua --preset pro
+python -m obfuscator.cli input.lua --preset free --optimizations
+python -m obfuscator.cli input.lua --base --control-flow --static-environment
+```
+
+## Discord bot
+
+### Commands
+* `/panel-free` — (admin only) posts the Free panel.
+* `/panel-pro` — (admin only) posts the Pro panel.
+* `/obfuscate <file>` — obfuscate an uploaded `.lua`/`.luau`/`.txt` file (for
+  scripts larger than the 4000-char paste modal). Tier is decided by the Pro
+  role; Free enforces the daily limit.
+* `/quota` — show remaining Free obfuscations today.
+
+Only the configured admin user (`PANEL_ADMIN_ID`, default
+`392050489505873931`) can deploy panels. Pro access is granted by the role
+`PRO_ROLE_ID` (default `1549480180672626688`).
+
+### Panel flow
+1. Admin posts a panel. It shows the tier's options and a **Configure &
+   Obfuscate** button.
+2. A user clicks it — Pro checks the role, Free checks the daily limit — and
+   gets a private (ephemeral) configuration view with a multi-select of
+   options and an **Obfuscate** button.
+3. Obfuscate opens a modal to paste the script; the result is returned as an
+   ephemeral `obfuscated.lua` attachment.
+
+### Running
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env          # then edit DISCORD_TOKEN
+export $(grep -v '^#' .env | xargs)   # or use your process manager
+python -m bot.bot
+```
+
+Required Discord settings: enable the **Server Members Intent** for the bot
+(used to detect the Pro role). Invite it with the `applications.commands` and
+`bot` scopes.
+
+## Tests
+
+```bash
+pip install pytest
+python -m pytest tests/
+```
+
+The suite obfuscates sample scripts under every option combination and asserts
+the obfuscated program prints exactly what the original does (validated with a
+`lua` interpreter).
+
+## Layout
+
+```
+obfuscator/            the obfuscator library
+  lexer.py parser.py generator.py   Lua front-end
+  walker.py namegen.py luastr.py    shared helpers
+  transforms/                       rename, numbers, strings, globals,
+                                    controlflow, optimize
+  packer.py                         LZW + cipher + loader layers + VM
+  pipeline.py cli.py                orchestration + CLI
+bot/                   the Discord bot
+  config.py usage.py obfuscation_service.py panels.py bot.py
+examples/              demo scripts used by the tests
+tests/                 behaviour tests
+```
