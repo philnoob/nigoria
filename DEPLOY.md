@@ -69,6 +69,10 @@ sudo systemctl restart nigoria-bot
   `GUILD_ID` in `.env` and restart for instant per-server sync.
 - **Bot can't see the Pro role / everyone looks Free:** enable the **Server
   Members Intent** in the Discord Developer Portal → Bot page.
+- **Upload button never receives the file:** enable the **Message Content
+  Intent** (Developer Portal → Bot page).
+- **Whitelist doesn't assign the Pro role:** give the bot **Manage Roles** and
+  drag its role **above** the Pro role in Server Settings → Roles.
 - **`active (exited)` or restart loop:** run `journalctl -u nigoria-bot -e`.
   A missing token gives "Set the DISCORD_TOKEN environment variable".
 - **Firewall:** none needed. The bot makes only outbound connections to

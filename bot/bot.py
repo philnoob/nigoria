@@ -3,8 +3,9 @@
 Commands:
   /panel-free   (admin only) posts the Free obfuscator panel
   /panel-pro    (admin only) posts the Pro obfuscator panel
-  /obfuscate    (any user) obfuscate an uploaded .lua/.txt file; tier is
-                decided by the Pro role, Free enforces the daily limit
+  /whitelist    (staff) grant a user Pro access + role
+  /unwhitelist  (staff) remove a user
+  /check        (staff) inspect access / list Pro+whitelisted users
   /quota        (any user) show remaining Free obfuscations today
 
 Run with the DISCORD_TOKEN environment variable set.
@@ -18,7 +19,7 @@ import discord
 from discord import app_commands
 
 from . import config
-from .obfuscation_service import default_keys, obfuscate_script
+from .settings import SettingsStore
 from .panels import (
     PanelView, build_panel_embed, is_pro_member, has_pro_access, _deliver,
 )
@@ -29,12 +30,15 @@ from .whitelist import WhitelistStore
 class NigoriaBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
-        # Member roles are needed to detect Pro membership.
+        # Member roles -> detect Pro membership; message content -> receive
+        # files uploaded through the panel's upload button.
         intents.members = True
+        intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.usage = UsageTracker(config.USAGE_FILE, config.FREE_DAILY_LIMIT)
         self.whitelist = WhitelistStore(config.WHITELIST_FILE)
+        self.settings = SettingsStore(config.SETTINGS_FILE)
 
     async def setup_hook(self) -> None:
         # Register persistent panel views so buttons keep working after restart.
@@ -70,21 +74,22 @@ def _is_staff(interaction: discord.Interaction) -> bool:
 @tree.command(name="panel-free", description="Post the Free obfuscator panel")
 async def panel_free(interaction: discord.Interaction):
     if not _admin_only(interaction):
-        await interaction.response.send_message(
-            "Only the configured admin can deploy panels.", ephemeral=True)
+        await interaction.response.send_message("not for you.", ephemeral=True)
         return
-    await interaction.response.send_message(
+    await interaction.response.send_message("posted.", ephemeral=True)
+    await interaction.channel.send(
         embed=build_panel_embed("free"), view=PanelView("free"))
 
 
 @tree.command(name="panel-pro", description="Post the Pro obfuscator panel")
 async def panel_pro(interaction: discord.Interaction):
     if not _admin_only(interaction):
-        await interaction.response.send_message(
-            "Only the configured admin can deploy panels.", ephemeral=True)
+        await interaction.response.send_message("not for you.", ephemeral=True)
         return
-    await interaction.response.send_message(
+    await interaction.response.send_message("posted.", ephemeral=True)
+    await interaction.channel.send(
         embed=build_panel_embed("pro"), view=PanelView("pro"))
+    interaction.client.settings.set("pro_panel_channel", interaction.channel.id)
 
 
 @tree.command(name="quota", description="Show your remaining Free obfuscations today")
@@ -99,47 +104,6 @@ async def quota(interaction: discord.Interaction):
         "(resets at UTC midnight).", ephemeral=True)
 
 
-@tree.command(name="obfuscate",
-              description="Obfuscate an uploaded .lua/.txt file")
-@app_commands.describe(
-    file="The Lua script file to obfuscate",
-    virtualization="Pro only: add the virtualization VM layer",
-    optimizations="Enable the optimizer pass",
-)
-async def obfuscate_cmd(interaction: discord.Interaction,
-                        file: discord.Attachment,
-                        virtualization: bool = False,
-                        optimizations: bool = False):
-    tier = "pro" if has_pro_access(interaction) else "free"
-
-    if not file.filename.lower().endswith((".lua", ".txt", ".luau")):
-        await interaction.response.send_message(
-            "Please upload a .lua, .luau or .txt file.", ephemeral=True)
-        return
-    if file.size > config.MAX_SCRIPT_CHARS * 4:
-        await interaction.response.send_message(
-            "That file is too large.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    try:
-        raw = await file.read()
-        source = raw.decode("utf-8", "replace")
-    except Exception as exc:
-        await interaction.followup.send(
-            f"Could not read the file: `{exc}`", ephemeral=True)
-        return
-
-    keys = default_keys(tier)
-    if tier == "pro" and virtualization:
-        keys.add("virt")
-    if optimizations:
-        keys.add("opt")
-
-    await _deliver(interaction, tier, keys, source)
-
-
-
 def _fmt_expiry(entry: dict) -> str:
     exp = entry.get("expires_at")
     if not exp:
@@ -149,6 +113,61 @@ def _fmt_expiry(entry: dict) -> str:
         return datetime.fromisoformat(exp).strftime("%Y-%m-%d %H:%M UTC")
     except ValueError:
         return "Lifetime"
+
+
+async def _grant_pro_and_announce(interaction: discord.Interaction,
+                                 user: discord.User, entry: dict) -> str:
+    """Best-effort: give the user the Pro role and ping them in the Pro channel.
+
+    Returns a short status string for the staff confirmation.
+    """
+    guild = interaction.guild
+    gave_role = False
+    role_problem = None
+    if guild is not None:
+        role = guild.get_role(config.PRO_ROLE_ID)
+        member = guild.get_member(user.id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user.id)
+            except discord.HTTPException:
+                member = None
+        if role is None:
+            role_problem = "pro role not found"
+        elif member is None:
+            role_problem = "user isn't in the server"
+        else:
+            try:
+                await member.add_roles(role, reason="whitelisted")
+                gave_role = True
+            except discord.Forbidden:
+                role_problem = "missing permission / role too high"
+            except discord.HTTPException:
+                role_problem = "discord error assigning role"
+
+    # Figure out where the Pro panel lives.
+    chan_id = (config.PRO_PANEL_CHANNEL_ID
+               or interaction.client.settings.get("pro_panel_channel"))
+    chan_id = int(chan_id) if chan_id else None
+    target = guild.get_channel(chan_id) if (guild and chan_id) else None
+    where = target.mention if target else "the pro panel"
+
+    if gave_role:
+        text = (f"{user.mention} just got whitelisted — you've been given the "
+                f"pro role, head to {where} to obfuscate.")
+    else:
+        text = (f"{user.mention} just got whitelisted — head to {where}. "
+                f"staff, please give them the pro role.")
+
+    announce_channel = target or interaction.channel
+    try:
+        await announce_channel.send(
+            text, allowed_mentions=discord.AllowedMentions(users=True))
+    except discord.HTTPException:
+        pass
+
+    status = "gave pro role" if gave_role else f"role not set ({role_problem})"
+    return status
 
 
 @tree.command(name="whitelist", description="Whitelist a user (blank days = lifetime)")
@@ -163,18 +182,20 @@ async def whitelist_cmd(interaction: discord.Interaction,
                         days: int | None = None):
     if not _is_staff(interaction):
         await interaction.response.send_message(
-            "You don't have permission to manage the whitelist.", ephemeral=True)
+            "you can't manage the whitelist.", ephemeral=True)
         return
     if days is not None and days < 0:
         await interaction.response.send_message(
-            "`days` cannot be negative. Leave it blank for lifetime.",
+            "days can't be negative — leave it blank for lifetime.",
             ephemeral=True)
         return
     entry = interaction.client.whitelist.add(
         user.id, note, days, interaction.user.id)
-    await interaction.response.send_message(
-        f"Whitelisted {user.mention} — expires: **{_fmt_expiry(entry)}**"
-        + (f"\nNote: {note}" if note else ""),
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    status = await _grant_pro_and_announce(interaction, user, entry)
+    await interaction.followup.send(
+        f"whitelisted {user.mention} — {status}. expires: "
+        f"**{_fmt_expiry(entry)}**" + (f" · note: {note}" if note else ""),
         ephemeral=True)
 
 
@@ -183,7 +204,7 @@ async def whitelist_cmd(interaction: discord.Interaction,
 async def unwhitelist_cmd(interaction: discord.Interaction, user: discord.User):
     if not _is_staff(interaction):
         await interaction.response.send_message(
-            "You don't have permission to manage the whitelist.", ephemeral=True)
+            "you can't manage the whitelist.", ephemeral=True)
         return
     removed = interaction.client.whitelist.remove(user.id)
     msg = (f"Removed {user.mention} from the whitelist."

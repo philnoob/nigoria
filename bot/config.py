@@ -30,6 +30,11 @@ DATA_DIR = os.environ.get("NIGORIA_DATA_DIR",
                           os.path.join(os.path.dirname(__file__), "..", "data"))
 USAGE_FILE = os.path.join(DATA_DIR, "usage.json")
 WHITELIST_FILE = os.path.join(DATA_DIR, "whitelist.json")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 # Optional: restrict slash-command sync to one guild for instant availability.
 GUILD_ID = os.environ.get("GUILD_ID")
+
+# Optional: fixed channel to point newly-whitelisted users to. If unset, the
+# channel where /panel-pro was last posted is used.
+PRO_PANEL_CHANNEL_ID = os.environ.get("PRO_PANEL_CHANNEL_ID")

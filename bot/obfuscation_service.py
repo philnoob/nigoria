@@ -24,7 +24,7 @@ PRO_OPTIONS = [
     ("intense", "Intense VM Structure",    True),
     ("advcomp", "Advanced VM Compression", True),
     ("cflow",   "Control Flow",            True),
-    ("virt",    "Virtualization",          False),
+    ("virt",    "Virtualization",          True),
     ("opt",     "Optimizations",           False),
 ]
 
@@ -45,6 +45,7 @@ def build_options(tier: str, keys: set[str], seed: int | None = None) -> Options
         virtualization="virt" in keys,
         optimizations="opt" in keys,
         vm_compression="vmcomp" in keys,
+        number_intensity=3 if tier == "pro" else 2,
         seed=seed,
     )
     if tier == "pro":

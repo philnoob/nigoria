@@ -54,13 +54,16 @@ python -m obfuscator.cli input.lua --base --control-flow --static-environment
 ### Commands
 * `/panel-free` — (admin only) posts the Free panel.
 * `/panel-pro` — (admin only) posts the Pro panel.
-* `/obfuscate <file>` — obfuscate an uploaded `.lua`/`.luau`/`.txt` file (for
-  scripts larger than the 4000-char paste modal). Tier is decided by Pro
-  access; Free enforces the daily limit.
 * `/quota` — show remaining Free obfuscations today.
+
+Scripts are submitted **through the panel** — either pasted (up to 4000 chars)
+or uploaded as a file (the panel's Upload button waits for you to drop a
+`.lua`/`.luau`/`.txt` file in the channel, then removes it).
 * `/whitelist <user> [note] [days]` — (staff) grant a user Pro access. Blank
-  `days` = lifetime. Whitelisted users bypass the Free limit and the Pro role
-  check.
+  `days` = lifetime. The bot also tries to assign the Pro role and posts a
+  message pinging the user pointing them to the Pro panel channel (the channel
+  where `/panel-pro` was last posted, or `PRO_PANEL_CHANNEL_ID`). Whitelisted
+  users bypass the Free limit and the Pro role check.
 * `/unwhitelist <user>` — (staff) remove a user from the whitelist.
 * `/check [user]` — with a user, show their access (Pro role / whitelist /
   expiry / effective tier). With no user, list everyone with Pro access
@@ -92,9 +95,12 @@ export $(grep -v '^#' .env | xargs)   # or use your process manager
 python -m bot.bot
 ```
 
-Required Discord settings: enable the **Server Members Intent** for the bot
-(used to detect the Pro role). Invite it with the `applications.commands` and
-`bot` scopes.
+Required Discord settings: enable the **Server Members Intent** (detect the Pro
+role) and the **Message Content Intent** (receive files uploaded through the
+panel) on the bot's page in the Developer Portal. Invite it with the
+`applications.commands` and `bot` scopes, and give it Manage Roles (above the
+Pro role) so it can grant the role on whitelist, plus Manage Messages so it can
+tidy up uploaded files.
 
 ## Tests
 

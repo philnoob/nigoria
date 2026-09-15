@@ -39,6 +39,7 @@ class Options:
     intense_vm_structure: bool = False      # extra nested layer + VM wrapper
     virtualization: bool = False        # opcode-dispatch VM wrapper
     optimizations: bool = False         # constant folding / dead code
+    number_intensity: int = 1           # depth of numeric-literal obfuscation
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -50,11 +51,12 @@ class Options:
             control_flow=True,
             vm_compression=True,
             optimizations=optimizations,
+            number_intensity=2,
             seed=seed,
         )
 
     @classmethod
-    def pro(cls, virtualization: bool = False, optimizations: bool = False,
+    def pro(cls, virtualization: bool = True, optimizations: bool = False,
             seed: int | None = None) -> "Options":
         return cls(
             base_obfuscation=True,
@@ -66,6 +68,7 @@ class Options:
             vm_compression=True,
             virtualization=virtualization,
             optimizations=optimizations,
+            number_intensity=3,
             seed=seed,
         )
 
@@ -130,7 +133,8 @@ class Obfuscator:
             block = flatten(block, self.rng, self.state_namer)
 
         if self.opt.base_obfuscation:
-            block = obfuscate_numbers(block, self.rng, intensity=1)
+            block = obfuscate_numbers(block, self.rng,
+                                      intensity=self.opt.number_intensity)
 
         if self.opt.static_environment:
             names = StringNames(
