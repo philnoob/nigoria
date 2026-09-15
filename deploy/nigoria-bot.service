@@ -1,0 +1,26 @@
+# systemd unit for the Nigoria obfuscator Discord bot.
+# Install to /etc/systemd/system/nigoria-bot.service (see DEPLOY.md).
+[Unit]
+Description=Nigoria Obfuscator Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The user and paths below are set by DEPLOY.md; edit them to match your box.
+User=nigoria
+WorkingDirectory=/opt/nigoria
+EnvironmentFile=/opt/nigoria/.env
+ExecStart=/opt/nigoria/.venv/bin/python -m bot.bot
+Restart=on-failure
+RestartSec=5
+# Persist the free-tier daily counts here (survives restarts/redeploys).
+Environment=NIGORIA_DATA_DIR=/opt/nigoria/data
+
+# Light hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
