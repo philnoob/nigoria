@@ -55,9 +55,20 @@ python -m obfuscator.cli input.lua --base --control-flow --static-environment
 * `/panel-free` — (admin only) posts the Free panel.
 * `/panel-pro` — (admin only) posts the Pro panel.
 * `/obfuscate <file>` — obfuscate an uploaded `.lua`/`.luau`/`.txt` file (for
-  scripts larger than the 4000-char paste modal). Tier is decided by the Pro
-  role; Free enforces the daily limit.
+  scripts larger than the 4000-char paste modal). Tier is decided by Pro
+  access; Free enforces the daily limit.
 * `/quota` — show remaining Free obfuscations today.
+* `/whitelist <user> [note] [days]` — (staff) grant a user Pro access. Blank
+  `days` = lifetime. Whitelisted users bypass the Free limit and the Pro role
+  check.
+* `/unwhitelist <user>` — (staff) remove a user from the whitelist.
+* `/check [user]` — with a user, show their access (Pro role / whitelist /
+  expiry / effective tier). With no user, list everyone with Pro access
+  (whitelisted + Pro-role members), 30 per page.
+
+"Pro access" means either the Pro role **or** an active whitelist entry.
+Whitelist management is available to the configured admin and to Discord
+server administrators (Administrator / Manage Server permission).
 
 Only the configured admin user (`PANEL_ADMIN_ID`, default
 `392050489505873931`) can deploy panels. Pro access is granted by the role

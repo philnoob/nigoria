@@ -35,6 +35,14 @@ def is_pro_member(user: discord.abc.User) -> bool:
     return any(r.id == config.PRO_ROLE_ID for r in member.roles)
 
 
+def has_pro_access(interaction: discord.Interaction) -> bool:
+    """Pro if the user has the Pro role OR an active whitelist entry."""
+    if is_pro_member(interaction.user):
+        return True
+    store = getattr(interaction.client, "whitelist", None)
+    return bool(store and store.is_whitelisted(interaction.user.id))
+
+
 async def _deliver(interaction: discord.Interaction, tier: str,
                    keys: set[str], source: str) -> None:
     """Run obfuscation off the event loop and send the result ephemerally."""
@@ -171,7 +179,7 @@ class PanelView(discord.ui.View):
 
     async def _open(self, interaction: discord.Interaction):
         tier = self.tier
-        if tier == "pro" and not is_pro_member(interaction.user):
+        if tier == "pro" and not has_pro_access(interaction):
             await interaction.response.send_message(
                 "This is the **Pro** panel. You need the Pro role to use it.",
                 ephemeral=True)

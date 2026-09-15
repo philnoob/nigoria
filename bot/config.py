@@ -29,6 +29,7 @@ MAX_SCRIPT_CHARS = int(os.environ.get("MAX_SCRIPT_CHARS", "200000"))
 DATA_DIR = os.environ.get("NIGORIA_DATA_DIR",
                           os.path.join(os.path.dirname(__file__), "..", "data"))
 USAGE_FILE = os.path.join(DATA_DIR, "usage.json")
+WHITELIST_FILE = os.path.join(DATA_DIR, "whitelist.json")
 
 # Optional: restrict slash-command sync to one guild for instant availability.
 GUILD_ID = os.environ.get("GUILD_ID")
