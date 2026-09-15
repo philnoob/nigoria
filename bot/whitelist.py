@@ -73,14 +73,15 @@ class WhitelistStore:
             return False
 
     def get(self, user_id: int) -> dict | None:
-        """Return the active entry, pruning it if it has expired."""
+        """Return the active entry, or None if missing/expired.
+
+        Expired entries are NOT deleted here — ``pop_expired`` is the single
+        place that removes them, so the expiry task can act (e.g. strip the
+        Pro role) before they disappear.
+        """
         with self._lock:
             entry = self._data.get(str(user_id))
-            if entry is None:
-                return None
-            if self._expired(entry):
-                del self._data[str(user_id)]
-                self._save()
+            if entry is None or self._expired(entry):
                 return None
             return dict(entry)
 
@@ -88,16 +89,29 @@ class WhitelistStore:
         return self.get(user_id) is not None
 
     def active_entries(self) -> list[tuple[int, dict]]:
-        """All non-expired entries as (user_id, entry), pruning expired ones."""
+        """All non-expired entries as (user_id, entry)."""
         with self._lock:
-            out = []
-            changed = False
-            for uid, entry in list(self._data.items()):
-                if self._expired(entry):
-                    del self._data[uid]
-                    changed = True
-                    continue
-                out.append((int(uid), dict(entry)))
-            if changed:
+            return [(int(uid), dict(entry))
+                    for uid, entry in self._data.items()
+                    if not self._expired(entry)]
+
+    def pop_expired(self) -> list[tuple[int, dict]]:
+        """Remove and return every expired entry as (user_id, entry)."""
+        with self._lock:
+            expired = [(int(uid), dict(entry))
+                       for uid, entry in list(self._data.items())
+                       if self._expired(entry)]
+            if expired:
+                for uid, _ in expired:
+                    self._data.pop(str(uid), None)
                 self._save()
-            return out
+            return expired
+
+    def mark_granted_role(self, user_id: int, granted: bool = True) -> None:
+        """Record whether the bot assigned the Pro role for this entry, so the
+        expiry task only removes roles it actually granted."""
+        with self._lock:
+            entry = self._data.get(str(user_id))
+            if entry is not None:
+                entry["granted_role"] = granted
+                self._save()

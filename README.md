@@ -63,7 +63,9 @@ or uploaded as a file (the panel's Upload button waits for you to drop a
   `days` = lifetime. The bot also tries to assign the Pro role and posts a
   message pinging the user pointing them to the Pro panel channel (the channel
   where `/panel-pro` was last posted, or `PRO_PANEL_CHANNEL_ID`). Whitelisted
-  users bypass the Free limit and the Pro role check.
+  users bypass the Free limit and the Pro role check. When a timed whitelist
+  expires, a background task (runs every 5 minutes) removes the Pro role again
+  — but only if the bot was the one that assigned it.
 * `/unwhitelist <user>` — (staff) remove a user from the whitelist.
 * `/check [user]` — with a user, show their access (Pro role / whitelist /
   expiry / effective tier). With no user, list everyone with Pro access

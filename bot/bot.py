@@ -17,6 +17,7 @@ import asyncio
 
 import discord
 from discord import app_commands
+from discord.ext import tasks
 
 from . import config
 from .settings import SettingsStore
@@ -44,6 +45,7 @@ class NigoriaBot(discord.Client):
         # Register persistent panel views so buttons keep working after restart.
         self.add_view(PanelView("free"))
         self.add_view(PanelView("pro"))
+        self.expiry_task.start()
         if config.GUILD_ID:
             guild = discord.Object(id=int(config.GUILD_ID))
             self.tree.copy_global_to(guild=guild)
@@ -53,6 +55,32 @@ class NigoriaBot(discord.Client):
 
     async def on_ready(self):
         print(f"Logged in as {self.user} (id {self.user.id})")
+
+    @tasks.loop(minutes=5)
+    async def expiry_task(self):
+        """Strip the Pro role from users whose timed whitelist has expired."""
+        expired = self.whitelist.pop_expired()
+        if not expired:
+            return
+        for user_id, entry in expired:
+            if not entry.get("granted_role"):
+                continue  # never touch a role we didn't assign
+            for guild in self.guilds:
+                role = guild.get_role(config.PRO_ROLE_ID)
+                member = guild.get_member(user_id)
+                if role is None or member is None:
+                    continue
+                if role in member.roles:
+                    try:
+                        await member.remove_roles(
+                            role, reason="whitelist expired")
+                        print(f"Removed Pro role from {user_id} (expired)")
+                    except discord.HTTPException:
+                        pass
+
+    @expiry_task.before_loop
+    async def _before_expiry(self):
+        await self.wait_until_ready()
 
 
 client = NigoriaBot()
@@ -140,6 +168,7 @@ async def _grant_pro_and_announce(interaction: discord.Interaction,
             try:
                 await member.add_roles(role, reason="whitelisted")
                 gave_role = True
+                interaction.client.whitelist.mark_granted_role(user.id, True)
             except discord.Forbidden:
                 role_problem = "missing permission / role too high"
             except discord.HTTPException:
