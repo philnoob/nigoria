@@ -27,7 +27,7 @@ so obfuscation always produces runnable output.
 | Hardcore Globals             | Every global reference is routed through a captured environment table (`ENV["print"]` …); combined with string encryption the names are hidden too. |
 | VM Compression               | Payload is LZW-compressed, ciphered, embedded in a loader that reconstructs and `loadstring`s it. |
 | Advanced VM Compression / Intense VM Structure | Additional nested loader layers, each with a distinct cipher. |
-| Virtualization (Pro)         | Compiles the script into a **polymorphic custom bytecode VM**. Every build randomizes the opcode numbers, all interpreter identifiers, the dispatch order, and the cipher parameters, and the program is serialized to an **encrypted flat bytecode stream** (no readable tables). Because the layout differs every build, a devirtualizer written for one output does not work on the next. Uses table-based frames, so it also runs scripts past Lua's 200-local limit. Falls back to the transform pipeline for unsupported constructs (`goto`, string interpolation). |
+| Virtualization (Pro)         | Compiles the script into a **polymorphic custom bytecode VM**. Per build it randomizes: **opcode numbers with several aliases each** (the same operation appears under different numbers, so frequency analysis and 1:1 opcode mapping fail), **all interpreter identifiers**, **the dispatch order**, **the interpreter architecture itself** (if/elseif chain vs a table of handler closures), the constant/stream **cipher parameters**, and it adds **decoy handlers** for unused opcodes and **junk code compiled into the bytecode**. The program is a ciphered, length-prefixed **flat bytecode stream** (no readable tables), which also removes Lua's parser/constant limits and the 200-local limit. No two builds share a layout, so there is no reusable devirtualizer. Falls back to the transform pipeline for unsupported constructs (`goto`, string interpolation). |
 | Optimizations                | Constant folding and trivial dead-code removal. |
 | Anti Tamper                  | Self-checking loader: a builtin sanity check and a payload hash abort if the code is swapped, plus (Pro) a self-correcting cipher whose key depends on a checksum of the embedded data — editing/beautifying the payload yields garbage instead of clean source. |
 | Junk / decoy code            | Injects unused locals, decoy tables and dead functions (bounded) to grow the output and mislead deobfuscators. |
@@ -52,16 +52,18 @@ keeps a large script's growth in the hundreds of KB rather than megabytes.
 
 **On deobfuscation:** the layered loaders can still be peeled by hooking
 `loadstring`, but with Pro Virtualization enabled that only reveals a
-*polymorphic* interpreter over an encrypted bytecode stream and encrypted
-constant pool. To recover the original a reverser must, **per build**: peel the
-self-correcting anti-tamper loaders, identify this build's randomized opcode
-map, decrypt the bytecode stream and constant pool (per-build ciphers), and
-reconstruct the AST — and a tool built for one output does not transfer to the
-next because every symbol, name and cipher is randomized. This is a real
-virtualizer, not literally unbreakable (a determined expert can still trace one
-interpreter by hand), but there is no reusable one-click devirtualizer.
-Scripts outside the VM's supported subset fall back to the strong transform
-pipeline.
+*polymorphic* interpreter (random architecture, aliased opcodes, decoy handlers,
+junk bytecode) over an encrypted flat bytecode stream and encrypted constant
+pool. To recover the original a reverser must, **per build**: peel the
+self-correcting anti-tamper loaders; work out this build's interpreter shape;
+map every opcode alias back to an operation; strip the decoy handlers and junk;
+decrypt the bytecode stream and constant pool (per-build ciphers); and
+reconstruct the AST. Because the architecture, every symbol/alias, name and
+cipher is randomized, a tool built for one output does not transfer to the next
+— there is no reusable one-click devirtualizer. It is not literally unbreakable
+(a determined expert can still hand-trace one interpreter), and the outer
+loaders remain peelable to reach the VM, but the bar is very high. Scripts
+outside the VM's supported subset fall back to the strong transform pipeline.
 
 ## CLI
 

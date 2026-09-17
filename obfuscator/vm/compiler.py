@@ -9,6 +9,8 @@ flattened into an encrypted bytecode stream by the emitter.
 from __future__ import annotations
 
 from .. import ast_nodes as A
+import random
+
 from .opcodes import OpMap
 
 
@@ -41,15 +43,18 @@ class ScopeC:
 
 
 class Compiler:
-    def __init__(self, ops: OpMap):
+    def __init__(self, ops: OpMap, rng: random.Random | None = None):
         self.ops = ops
+        self.rng = rng or random.Random()
         self.next_slot = 1
         self.consts: list[str] = []       # string form of every constant
         self.const_index: dict[str, int] = {}
         self.protos: list = []
 
     def op(self, name: str) -> int:
-        return self.ops[name]
+        # random alias each time -> the same operation appears under several
+        # different numbers throughout the bytecode
+        return self.ops.pick(name, self.rng)
 
     def new_slot(self) -> int:
         s = self.next_slot
@@ -262,5 +267,6 @@ def _clean_number(raw: str) -> str:
     return raw.strip().replace("_", "")
 
 
-def compile_chunk(block: A.Block, ops: OpMap | None = None):
-    return Compiler(ops or OpMap()).compile_chunk(block)
+def compile_chunk(block: A.Block, ops: OpMap | None = None,
+                  rng: random.Random | None = None):
+    return Compiler(ops or OpMap(), rng).compile_chunk(block)

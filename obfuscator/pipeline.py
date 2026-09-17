@@ -136,10 +136,15 @@ class Obfuscator:
             return None  # let _transform_body record the fallback
         if self.opt.optimizations:
             block = optimize_pass(block)
+        if self.opt.junk_code:
+            # decoy code compiled straight into the bytecode
+            block = inject_junk(block, self.preamble_namer, self.rng,
+                                intensity=self.opt.junk_intensity)
         try:
             seed = self.opt.seed
             ops = OpMap(None if seed is None else seed ^ 0x5EED)
-            program = compile_chunk(block, ops)
+            crng = random.Random(None if seed is None else seed ^ 0x7A5)
+            program = compile_chunk(block, ops, crng)
             return emit_vm(program, None if seed is None else seed ^ 0x11CE)
         except VMUnsupported as exc:
             self.warnings.append(f"vm fallback ({exc}); used transform pipeline")

@@ -1,15 +1,10 @@
 """Emit a polymorphic VM interpreter over an encrypted flat bytecode stream.
 
-Every build randomizes:
-  * opcode numbers (via OpMap) — the bytecode of one build is meaningless to a
-    devirtualizer written for another,
-  * all interpreter identifier names,
-  * the order of dispatch arms,
-  * the constant-pool cipher parameters and the bytecode-stream cipher.
-
-The program itself is serialized to a flat, length-prefixed, ciphered byte
-stream (no nested Lua tables), which also removes the parser/'too many
-constants' limits, so large scripts virtualize too.
+Per build, everything is randomized: opcode numbers (with several aliases per
+operation), all identifiers, dispatch-arm order, cipher parameters, AND the
+interpreter architecture itself — either an if/elseif dispatch chain or a table
+of handler closures. Decoy handlers for unused opcode numbers add noise. The
+program is a ciphered, length-prefixed flat byte stream (no readable tables).
 """
 
 from __future__ import annotations
@@ -42,10 +37,8 @@ def _varint(n: int, out: bytearray) -> None:
     while True:
         b = n & 0x7F
         n >>= 7
-        if n:
-            out.append(b | 0x80)
-        else:
-            out.append(b)
+        out.append(b | 0x80 if n else b)
+        if not n:
             break
 
 
@@ -53,7 +46,6 @@ def _serialize(value, ops: OpMap, out: bytearray) -> None:
     if value is None:
         out.append(ops["ST_nil"])
     elif isinstance(value, bool):
-        # not used, but keep booleans out of the stream
         raise Unsupported("bool in program")
     elif isinstance(value, int):
         out.append(ops["ST_int"])
@@ -86,8 +78,12 @@ def _encrypt_pool(consts, a, b, c):
     return _byte_literal(bytes(concatenated)), "{" + ",".join(map(str, idx)) + "}"
 
 
-# --- interpreter generation -------------------------------------------------
-_HEADER = Template(r"""
+def _guard(var: str, nums) -> str:
+    return " or ".join(f"{var}=={n}" for n in nums)
+
+
+# --- static runtime scaffolding --------------------------------------------
+_SCAFFOLD = Template(r"""
 local $ENV=(getfenv and getfenv(0)) or _ENV or _G
 local $unpack=table.unpack or unpack
 local $pack=function(...) return {n=select('#',...),...} end
@@ -112,12 +108,20 @@ $readval=function() local t=$rb() if t==$stint then return $rv() elseif t==$stni
 local $PROG=$readval()
 local $CH=$PROG[1]
 local $PROTOS=$PROG[2]
-local $evalexpr,$evalmulti,$evallist,$runstmts,$makeclosure,$assign,$ismulti,$runblock
+local $evalexpr,$evalmulti,$evallist,$runstmts,$makeclosure,$assign,$ismulti,$runblock,$EH,$SH
 local function $newframe(p) return {[0]=p} end
 local function $getlocal($env,id) local f=$env while f do local v=f[id] if v~=nil then if v==$NIL then return nil end return v end f=f[0] end end
 local function $declare($env,id,v) $env[id]=(v==nil) and $NIL or v end
 local function $setex($env,id,v) local f=$env while f do if f[id]~=nil then f[id]=(v==nil) and $NIL or v return end f=f[0] end $env[id]=(v==nil) and $NIL or v end
-$ismulti=function(nd) local o=nd[1] return o==$op_ECALL or o==$op_EMETHOD or o==$op_EVARARG end
+$evallist=function(nodes,$env,$va)
+  local out,n={},0 local cnt=#nodes
+  for i=1,cnt do local nd=nodes[i]
+    if i==cnt and $ismulti(nd) then local r=$evalmulti(nd,$env,$va) for k=1,r.n do n=n+1 out[n]=r[k] end
+    else n=n+1 out[n]=$evalexpr(nd,$env,$va) end
+  end
+  out.n=n return out
+end
+$runblock=function(block,$env,$va) return $runstmts(block,$newframe($env),$va) end
 $makeclosure=function(pi,defenv)
   local proto=$PROTOS[pi] local np=proto[1] local va=proto[2] local params=proto[3] local body=proto[4]
   return function(...)
@@ -128,35 +132,14 @@ $makeclosure=function(pi,defenv)
     if s and s[1]==$sret then return $unpack(s[2],1,s[2].n) end
   end
 end
-$evalmulti=function($nd,$env,$va)
-  local op=$nd[1]
-  if op==$op_ECALL then local f=$evalexpr($nd[2],$env,$va) local a=$evallist($nd[3],$env,$va) return $pack(f($unpack(a,1,a.n)))
-  elseif op==$op_EMETHOD then local ob=$evalexpr($nd[2],$env,$va) local m=ob[$K[$nd[3]]] local a=$evallist($nd[4],$env,$va) return $pack(m(ob,$unpack(a,1,a.n)))
-  elseif op==$op_EVARARG then return $va
-  else return $pack($evalexpr($nd,$env,$va)) end
-end
-$evallist=function(nodes,$env,$va)
-  local out,n={},0 local cnt=#nodes
-  for i=1,cnt do local nd=nodes[i]
-    if i==cnt and $ismulti(nd) then local r=$evalmulti(nd,$env,$va) for k=1,r.n do n=n+1 out[n]=r[k] end
-    else n=n+1 out[n]=$evalexpr(nd,$env,$va) end
-  end
-  out.n=n return out
-end
-$assign=function(tg,val,$env,$va)
-  local op=tg[1]
-  if op==$op_ELOCAL then $setex($env,tg[2],val)
-  elseif op==$op_EGLOBAL then $ENV[$K[tg[2]]]=val
-  else $evalexpr(tg[2],$env,$va)[$evalexpr(tg[3],$env,$va)]=val end
-end
-$runblock=function(block,$env,$va) return $runstmts(block,$newframe($env),$va) end
 """)
 
 _ENTRY = Template("local $top=$newframe(nil) return $makeclosure($CH,$top)(...)\n")
 
 
-def _emit_evalexpr(M, rng):
-    arms = [
+# --- arm bodies (shared by both architectures) -----------------------------
+def _expr_arms(ops):
+    return [
         (["EK"], "return $K[$nd[2]]"),
         (["EKNUM"], "return $tonum($K[$nd[2]])"),
         (["ENIL"], "return nil"),
@@ -169,30 +152,34 @@ def _emit_evalexpr(M, rng):
         (["EPAREN"], "return $evalexpr($nd[2],$env,$va)"),
         (["ECALL", "EMETHOD"], "local r=$evalmulti($nd,$env,$va) return r[1]"),
         (["EFUNC"], "return $makeclosure($nd[2],$env)"),
-        (["EUN"], _UN_BODY),
-        (["EBIN"], _emit_bin(M, rng)),
-        (["ETABLE"], _TABLE_BODY),
+        (["EUN"], _un_body(ops)),
+        (["EBIN"], _bin_body(ops)),
+        (["ETABLE"], _table_body(ops)),
     ]
-    rng.shuffle(arms)
-    return _dispatch("$evalexpr=function($nd,$env,$va)\nlocal op=$nd[1]\n", arms, M)
 
 
-_UN_BODY = ("local a=$evalexpr($nd[3],$env,$va) local u=$nd[2] "
-            "if u==$op_U_neg then return -a elseif u==$op_U_not then return not a "
-            "elseif u==$op_U_len then return #a else return ~a end")
-
-_TABLE_BODY = (
-    "local t={} local arr=0 local fs=$nd[2] "
-    "for i=1,#fs do local f=fs[i] "
-    "if f[1]==$op_T_arr then "
-    "if i==#fs and $ismulti(f[2]) then local r=$evalmulti(f[2],$env,$va) "
-    "for k=1,r.n do arr=arr+1 t[arr]=r[k] end "
-    "else arr=arr+1 t[arr]=$evalexpr(f[2],$env,$va) end "
-    "else t[$evalexpr(f[2],$env,$va)]=$evalexpr(f[3],$env,$va) end end return t")
+def _un_body(ops):
+    return ("local a=$evalexpr($nd[3],$env,$va) local u=$nd[2] "
+            f"if {_guard('u', ops.all('U_neg'))} then return -a "
+            f"elseif {_guard('u', ops.all('U_not'))} then return not a "
+            f"elseif {_guard('u', ops.all('U_len'))} then return #a "
+            "else return ~a end")
 
 
-def _emit_bin(M, rng):
-    ops = [
+def _table_body(ops):
+    g = _guard("f[1]", ops.all("T_arr"))
+    return (
+        "local t={} local arr=0 local fs=$nd[2] "
+        "for i=1,#fs do local f=fs[i] "
+        f"if {g} then "
+        "if i==#fs and $ismulti(f[2]) then local r=$evalmulti(f[2],$env,$va) "
+        "for k=1,r.n do arr=arr+1 t[arr]=r[k] end "
+        "else arr=arr+1 t[arr]=$evalexpr(f[2],$env,$va) end "
+        "else t[$evalexpr(f[2],$env,$va)]=$evalexpr(f[3],$env,$va) end end return t")
+
+
+def _bin_body(ops):
+    arith = [
         ("B_add", "return l+r"), ("B_sub", "return l-r"), ("B_mul", "return l*r"),
         ("B_div", "return l/r"), ("B_mod", "return l%r"), ("B_pow", "return l^r"),
         ("B_idiv", "return l//r"), ("B_concat", "return l..r"),
@@ -201,24 +188,26 @@ def _emit_bin(M, rng):
         ("B_band", "return l&r"), ("B_bor", "return l|r"), ("B_bxor", "return l~r"),
         ("B_shl", "return l<<r"), ("B_shr", "return l>>r"),
     ]
-    rng.shuffle(ops)
-    parts = ["local b=$nd[2] "
-             "if b==$op_B_and then local l=$evalexpr($nd[3],$env,$va) "
-             "if not l then return l end return $evalexpr($nd[4],$env,$va) "
-             "elseif b==$op_B_or then local l=$evalexpr($nd[3],$env,$va) "
-             "if l then return l end return $evalexpr($nd[4],$env,$va) end "
-             "local l=$evalexpr($nd[3],$env,$va) local r=$evalexpr($nd[4],$env,$va) "]
-    for i, (name, body) in enumerate(ops):
-        kw = "if" if i == 0 else "elseif"
-        if i == len(ops) - 1:
+    parts = [
+        "local b=$nd[2] ",
+        f"if {_guard('b', ops.all('B_and'))} then local l=$evalexpr($nd[3],$env,$va) "
+        "if not l then return l end return $evalexpr($nd[4],$env,$va) ",
+        f"elseif {_guard('b', ops.all('B_or'))} then local l=$evalexpr($nd[3],$env,$va) "
+        "if l then return l end return $evalexpr($nd[4],$env,$va) end ",
+        "local l=$evalexpr($nd[3],$env,$va) local r=$evalexpr($nd[4],$env,$va) ",
+    ]
+    for i, (name, body) in enumerate(arith):
+        if i == len(arith) - 1:
             parts.append(f"else {body} end")
+        elif i == 0:
+            parts.append(f"if {_guard('b', ops.all(name))} then {body} ")
         else:
-            parts.append(f"{kw} b==$op_{name} then {body} ")
+            parts.append(f"elseif {_guard('b', ops.all(name))} then {body} ")
     return "".join(parts)
 
 
-def _emit_runstmts(M, rng):
-    arms = [
+def _stmt_arms():
+    return [
         (["SLOCAL"], "local vals=$evallist(st[3],$env,$va) local ids=st[2] "
                      "for k=1,#ids do $declare($env,ids[k],vals[k]) end"),
         (["SASSIGN"], "local vals=$evallist(st[3],$env,$va) local tg=st[2] "
@@ -250,31 +239,89 @@ def _emit_runstmts(M, rng):
         (["SBREAK"], "sig={$sbrk}"),
         (["SCONTINUE"], "sig={$scont}"),
     ]
+
+
+def _multi_and_assign(ops):
+    ev = ("$evalmulti=function($nd,$env,$va) local op=$nd[1] "
+          f"if {_guard('op', ops.all('ECALL'))} then local f=$evalexpr($nd[2],$env,$va) "
+          "local a=$evallist($nd[3],$env,$va) return $pack(f($unpack(a,1,a.n))) "
+          f"elseif {_guard('op', ops.all('EMETHOD'))} then local ob=$evalexpr($nd[2],$env,$va) "
+          "local m=ob[$K[$nd[3]]] local a=$evallist($nd[4],$env,$va) return $pack(m(ob,$unpack(a,1,a.n))) "
+          f"elseif {_guard('op', ops.all('EVARARG'))} then return $va "
+          "else return $pack($evalexpr($nd,$env,$va)) end end\n")
+    im = ("$ismulti=function(nd) local o=nd[1] return "
+          + _guard("o", ops.all("ECALL") + ops.all("EMETHOD") + ops.all("EVARARG"))
+          + " end\n")
+    asg = ("$assign=function(tg,val,$env,$va) local op=tg[1] "
+           f"if {_guard('op', ops.all('ELOCAL'))} then $setex($env,tg[2],val) "
+           f"elseif {_guard('op', ops.all('EGLOBAL'))} then $ENV[$K[tg[2]]]=val "
+           "else $evalexpr(tg[2],$env,$va)[$evalexpr(tg[3],$env,$va)]=val end end\n")
+    return im + ev + asg
+
+
+# --- architecture A: if/elseif dispatch ------------------------------------
+def _archA_expr(arms, ops, rng):
     rng.shuffle(arms)
-    head = ("$runstmts=function(block,$env,$va)\n"
-            "for i=1,#block do local st=block[i] local op=st[1] local sig\n")
-    body = _dispatch_stmt(head, arms)
-    return body
-
-
-def _dispatch(head, arms, M):
-    parts = [head]
+    parts = ["$evalexpr=function($nd,$env,$va)\nlocal op=$nd[1]\n"]
     for i, (syms, body) in enumerate(arms):
-        guard = " or ".join(f"op==$op_{s}" for s in syms)
+        nums = [n for s in syms for n in ops.all(s)]
         kw = "if" if i == 0 else "elseif"
-        parts.append(f"{kw} {guard} then {body}\n")
+        parts.append(f"{kw} {_guard('op', nums)} then {body}\n")
+    for fn in ops.free[:4]:
+        parts.append(f"elseif op=={fn} then return nil\n")
     parts.append("end\nend\n")
     return "".join(parts)
 
 
-def _dispatch_stmt(head, arms):
-    parts = [head]
+def _archA_stmt(arms, ops, rng):
+    rng.shuffle(arms)
+    parts = ["$runstmts=function(block,$env,$va)\n"
+             "for i=1,#block do local st=block[i] local op=st[1] local sig\n"]
     for i, (syms, body) in enumerate(arms):
-        guard = " or ".join(f"op==$op_{s}" for s in syms)
+        nums = [n for s in syms for n in ops.all(s)]
         kw = "if" if i == 0 else "elseif"
-        parts.append(f"{kw} {guard} then {body}\n")
+        parts.append(f"{kw} {_guard('op', nums)} then {body}\n")
+    for fn in ops.free[4:7]:
+        parts.append(f"elseif op=={fn} then local _z=1\n")
     parts.append("end\nif sig then return sig end\nend\nend\n")
     return "".join(parts)
+
+
+# --- architecture B: handler-table dispatch --------------------------------
+def _archB_expr(arms, ops, rng, namer):
+    rng.shuffle(arms)
+    lines = ["$EH={}\n"]
+    for syms, body in arms:
+        h = namer.new()
+        lines.append(f"local {h}=function($nd,$env,$va) {body} end\n")
+        for s in syms:
+            for n in ops.all(s):
+                lines.append(f"$EH[{n}]={h}\n")
+    for fn in ops.free[:4]:
+        h = namer.new()
+        lines.append(f"local {h}=function($nd,$env,$va) return $nd end\n")
+        lines.append(f"$EH[{fn}]={h}\n")
+    lines.append("$evalexpr=function($nd,$env,$va) return $EH[$nd[1]]($nd,$env,$va) end\n")
+    return "".join(lines)
+
+
+def _archB_stmt(arms, ops, rng, namer):
+    rng.shuffle(arms)
+    lines = ["$SH={}\n"]
+    for syms, body in arms:
+        h = namer.new()
+        lines.append(f"local {h}=function(st,$env,$va) local sig {body} return sig end\n")
+        for s in syms:
+            for n in ops.all(s):
+                lines.append(f"$SH[{n}]={h}\n")
+    for fn in ops.free[4:7]:
+        h = namer.new()
+        lines.append(f"local {h}=function(st,$env,$va) local _z=1 end\n")
+        lines.append(f"$SH[{fn}]={h}\n")
+    lines.append("$runstmts=function(block,$env,$va) for i=1,#block do "
+                 "local st=block[i] local sig=$SH[st[1]](st,$env,$va) "
+                 "if sig then return sig end end end\n")
+    return "".join(lines)
 
 
 def emit_vm(program: dict, seed: int | None = None) -> str:
@@ -282,47 +329,45 @@ def emit_vm(program: dict, seed: int | None = None) -> str:
     ops = program["_ops"]
     namer = _Namer(rng)
 
-    # names
     names = [
         "ENV", "unpack", "pack", "sbyte", "schar", "concat", "tonum", "NIL",
         "POOL", "IDX", "K", "C", "S", "pos", "rb", "rv", "readval", "PROG",
         "CH", "PROTOS", "evalexpr", "evalmulti", "evallist", "runstmts",
         "makeclosure", "assign", "ismulti", "runblock", "newframe", "getlocal",
-        "declare", "setex", "nd", "env", "va", "top",
+        "declare", "setex", "nd", "env", "va", "top", "EH", "SH",
     ]
     M = {n: namer.new() for n in names}
-    # opcode numbers
-    for sym in ops.map:
-        M["op_" + sym] = str(ops[sym])
-    M["stint"] = str(ops["ST_int"])
-    M["stnil"] = str(ops["ST_nil"])
-    M["starr"] = str(ops["ST_arr"])
-    # signal kinds (internal, still randomized)
-    sig_vals = rng.sample(range(1, 200), 3)
-    M["sret"], M["sbrk"], M["scont"] = map(str, sig_vals)
-    # cipher params
-    M["pa"], M["pb"], M["pc"] = str(rng.randint(3, 250)), str(rng.randint(3, 250)), str(rng.randint(3, 250))
+    M["stint"], M["starr"], M["stnil"] = (
+        str(ops["ST_int"]), str(ops["ST_arr"]), str(ops["ST_nil"]))
+    sret, sbrk, scont = rng.sample(range(1, 400), 3)
+    M["sret"], M["sbrk"], M["scont"] = str(sret), str(sbrk), str(scont)
+    M["pa"], M["pb"], M["pc"] = (str(rng.randint(3, 250)), str(rng.randint(3, 250)),
+                                 str(rng.randint(3, 250)))
     M["cs"], M["ct"] = str(rng.randint(1, 250)), str(rng.randint(1, 250))
 
-    # pool (uses pa/pb/pc)
     pool_lit, idx_lit = _encrypt_pool(program["consts"], int(M["pa"]),
                                       int(M["pb"]), int(M["pc"]))
 
-    # serialize program -> [chunk, protos-as-arrays]
     protos = [[p["np"], p["va"], p["params"], p["body"]] for p in program["protos"]]
-    prog_struct = [program["chunk"], protos]
     raw = bytearray()
-    _serialize(prog_struct, ops, raw)
-    # cipher the stream
+    _serialize([program["chunk"], protos], ops, raw)
     cs, ct = int(M["cs"]), int(M["ct"])
     ciph = bytes((b + (cs + (i + 1) * ct)) % 256 for i, b in enumerate(raw))
     stream_lit = _byte_literal(ciph)
 
-    # assemble raw templates (all still carry $ placeholders), then substitute
-    # once so every name/opcode is consistent.
-    raw_body = (_HEADER.template
-                + _emit_evalexpr(M, rng)
-                + _emit_runstmts(M, rng)
+    expr_arms = _expr_arms(ops)
+    stmt_arms = _stmt_arms()
+    arch_b = rng.random() < 0.5
+    if arch_b:
+        expr_code = _archB_expr(expr_arms, ops, rng, namer)
+        stmt_code = _archB_stmt(stmt_arms, ops, rng, namer)
+    else:
+        expr_code = _archA_expr(expr_arms, ops, rng)
+        stmt_code = _archA_stmt(stmt_arms, ops, rng)
+
+    raw_body = (_SCAFFOLD.template
+                + _multi_and_assign(ops)
+                + expr_code + stmt_code
                 + _ENTRY.template)
     body = Template(raw_body).substitute(M)
     body = (body.replace("__POOL__", pool_lit)

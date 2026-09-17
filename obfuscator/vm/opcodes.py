@@ -1,10 +1,10 @@
-"""Per-build opcode / symbol maps for the VM.
+"""Per-build opcode / symbol maps with aliasing.
 
-Every symbol the VM uses (expression ops, statement ops, binary/unary operator
-codes, table-field tags, serialization type tags) is assigned a distinct random
-integer per build. The compiler emits these numbers and the emitter generates a
-matching interpreter, so the bytecode of one build is meaningless to a
-devirtualizer written for another.
+Each operation is assigned SEVERAL distinct random numbers (aliases). The
+compiler picks one at random for every emitted node, so the same operation
+appears under different numbers throughout the bytecode — defeating frequency
+analysis and one-to-one opcode mapping. Serialization tags and signal kinds get
+a single number. ``free`` holds numbers assigned to nothing, for decoy handlers.
 """
 
 from __future__ import annotations
@@ -25,21 +25,44 @@ BINOPS = [
     "B_band", "B_bor", "B_bxor", "B_shl", "B_shr",
 ]
 UNOPS = ["U_neg", "U_not", "U_len", "U_bnot"]
-TAGS = ["T_arr", "T_key"]              # table-field kinds
-STAGS = ["ST_int", "ST_arr", "ST_nil"]  # serialization value tags
+TAGS = ["T_arr", "T_key"]
+STAGS = ["ST_int", "ST_arr", "ST_nil"]
 
-ALL_SYMBOLS = EXPR_OPS + STMT_OPS + BINOPS + UNOPS + TAGS + STAGS
+ALIASABLE = EXPR_OPS + STMT_OPS + BINOPS + UNOPS + TAGS
 
 
 class OpMap:
     def __init__(self, seed: int | None = None):
         rng = random.Random(seed)
-        # distinct random values across every symbol
-        pool = list(range(1, 256))
+        pool = list(range(1, 512))       # 9-bit space, plenty of room
         rng.shuffle(pool)
-        if len(ALL_SYMBOLS) > len(pool):  # pragma: no cover - impossible today
-            raise RuntimeError("not enough opcode space")
-        self.map = {name: pool[i] for i, name in enumerate(ALL_SYMBOLS)}
+        it = iter(pool)
+
+        def take(k):
+            return [next(it) for _ in range(k)]
+
+        self.aliases: dict[str, list[int]] = {}
+        used: set[int] = set()
+        for name in ALIASABLE:
+            vals = take(rng.randint(2, 3))
+            self.aliases[name] = vals
+            used.update(vals)
+        # Serialization tags are written as raw bytes, so keep them <=255 and
+        # distinct from each other (they live in a different read context, so
+        # overlap with opcode numbers is harmless).
+        byte_pool = [n for n in range(1, 256) if n not in used]
+        rng.shuffle(byte_pool)
+        for i, name in enumerate(STAGS):
+            self.aliases[name] = [byte_pool[i]]
+        self.map = {n: v[0] for n, v in self.aliases.items()}
+        self.free = [n for n in list(it) if n <= 255]
+        rng.shuffle(self.free)
+
+    def all(self, name: str) -> list[int]:
+        return self.aliases[name]
+
+    def pick(self, name: str, rng: random.Random) -> int:
+        return rng.choice(self.aliases[name])
 
     def __getitem__(self, name: str) -> int:
         return self.map[name]
