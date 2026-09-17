@@ -108,7 +108,9 @@ for i=1,#$IDX/2 do
   $K[i]=$concat(b)
 end
 local $C=__STREAM__
-local $S do local t={} for i=1,#$C do t[i]=$schar(($sbyte($C,i)-(($cs+i*$ct)%256))%256) end $S=$concat(t) end
+local $chk=0 for i=1,#$C do $chk=($chk+$sbyte($C,i))%16777216 end
+local $ds=$cs+($chk-__EXPCHK__)
+local $S do local t={} for i=1,#$C do t[i]=$schar(($sbyte($C,i)-(($ds+i*$ct)%256))%256) end $S=$concat(t) end
 local $pos=1
 local function $rb() local x=$sbyte($S,$pos) $pos=$pos+1 return x end
 local function $rv() local sh=0 local r=0 while true do local x=$rb() r=r+(x%128)*(2^sh) if x<128 then break end sh=sh+7 end return r end
@@ -345,6 +347,7 @@ def emit_vm(program: dict, seed: int | None = None) -> str:
         "makeclosure", "assign", "ismulti", "runblock", "newframe", "getlocal",
         "declare", "setex", "nd", "env", "va", "top", "EH", "SH",
         "mfloor", "P2", "tou", "band", "bor", "bxor", "lshift", "rshift", "bnot",
+        "ds", "chk",
     ]
     M = {n: namer.new() for n in names}
     M["stint"], M["starr"], M["stnil"] = (
@@ -364,6 +367,7 @@ def emit_vm(program: dict, seed: int | None = None) -> str:
     cs, ct = int(M["cs"]), int(M["ct"])
     ciph = bytes((b + (cs + (i + 1) * ct)) % 256 for i, b in enumerate(raw))
     stream_lit = _byte_literal(ciph)
+    expchk = sum(ciph) % 16777216
 
     expr_arms = _expr_arms(ops)
     stmt_arms = _stmt_arms()
@@ -382,5 +386,6 @@ def emit_vm(program: dict, seed: int | None = None) -> str:
     body = Template(raw_body).substitute(M)
     body = (body.replace("__POOL__", pool_lit)
                 .replace("__IDX__", idx_lit)
-                .replace("__STREAM__", stream_lit))
+                .replace("__STREAM__", stream_lit)
+                .replace("__EXPCHK__", str(expchk)))
     return body

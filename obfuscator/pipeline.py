@@ -49,6 +49,7 @@ class Options:
     junk_intensity: int = 1              # how much junk per block
     extra_layers: int = 0                # additional nested loader layers
     real_vm: bool = False                # compile to a custom bytecode VM
+    pack_vm: bool = False                # also wrap the VM in loadstring loaders
     header: str = HEADER                 # banner comment prepended to output
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -115,10 +116,17 @@ class Obfuscator:
             None if seed is None else seed ^ 0x1234567)
 
     def obfuscate(self, source: str) -> str:
+        self._used_vm = False
         body, ok = self._build_body(source)
         if not ok:
             self.warnings.append(
                 "source could not be fully parsed; applied packing only")
+        # The VM interprets its own encrypted bytecode and never calls
+        # loadstring, so it is emitted directly with NO loadstring packing
+        # layers. That removes the hook point loadstring-dumpers rely on: a
+        # dumper that hooks loadstring/load captures nothing at all.
+        if self._used_vm and not self.opt.pack_vm:
+            return self.opt.header + body
         packed = self._pack(body)
         return self.opt.header + packed
 
@@ -126,6 +134,7 @@ class Obfuscator:
         if self.opt.real_vm:
             vm = self._try_vm(source)
             if vm is not None:
+                self._used_vm = True
                 return vm, True
         return self._transform_body(source)
 

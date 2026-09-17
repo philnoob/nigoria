@@ -50,6 +50,12 @@ Output size overhead scales with the input (roughly proportional, not
 multiplied): a single compressed loader layer with a compact base64 payload
 keeps a large script's growth in the hundreds of KB rather than megabytes.
 
+**No loadstring hook point (Pro VM):** the VM interprets its own encrypted
+bytecode and never calls `loadstring`/`load`, so the Pro output is emitted
+directly with no packing loaders. A dumper that hooks `loadstring`/`load` — the
+standard technique — captures nothing at all. (Free/fallback still use a
+loadstring loader, since obfuscated *source* has to be compiled to run.)
+
 **On deobfuscation:** the layered loaders can still be peeled by hooking
 `loadstring`, but with Pro Virtualization enabled that only reveals a
 *polymorphic* interpreter (random architecture, aliased opcodes, decoy handlers,
