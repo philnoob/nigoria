@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from . import ast_nodes as A
 from .generator import generate
 from .namegen import NameGenerator, PreambleNamer
+from .decoys import decoy_traps
 from .packer import pack
 from .parser import ParseError, parse
 from .lexer import LexError
@@ -50,6 +51,7 @@ class Options:
     extra_layers: int = 0                # additional nested loader layers
     real_vm: bool = False                # compile to a custom bytecode VM
     pack_vm: bool = False                # also wrap the VM in loadstring loaders
+    decoy_traps: bool = False            # plant fake loadstring calls to poison dumpers
     header: str = HEADER                 # banner comment prepended to output
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -88,6 +90,7 @@ class Options:
             junk_code=True,
             junk_intensity=2,
             real_vm=True,
+            decoy_traps=True,
             header=HEADER_PRO,
             seed=seed,
         )
@@ -126,6 +129,9 @@ class Obfuscator:
         # layers. That removes the hook point loadstring-dumpers rely on: a
         # dumper that hooks loadstring/load captures nothing at all.
         if self._used_vm and not self.opt.pack_vm:
+            if self.opt.decoy_traps:
+                body = decoy_traps(self.preamble_namer, self.rng,
+                                   count=self.rng.randint(3, 6)) + body
             return self.opt.header + body
         packed = self._pack(body)
         return self.opt.header + packed

@@ -181,3 +181,27 @@ def test_two_pro_builds_differ():
     a = Obfuscator(Options.pro(seed=1)).obfuscate('print("hi")')
     b = Obfuscator(Options.pro(seed=2)).obfuscate('print("hi")')
     assert a != b  # polymorphic: no two builds share a layout
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua interpreter available")
+def test_loadstring_dumper_gets_only_decoys():
+    """A loadstring-hook dumper must capture only decoys, never real logic,
+    and the real program must still run."""
+    src = ('local secret="REAL_LOGIC_9931" '
+           'local function calc(a,b) return a*b+7 end print(secret, calc(6,7))')
+    out = Obfuscator(Options.pro(seed=8)).obfuscate(src)
+    path = _obfuscate_path(out)
+    dumper = (
+        'local cap={} local real=load\n'
+        'local function h(s,...) cap[#cap+1]=s return function() end end\n'
+        'loadstring=h load=h\n'
+        'pcall(real(io.open("%s"):read("*a")))\n'
+        'local leaked=false\n'
+        'for _,c in ipairs(cap) do if tostring(c):find("REAL_LOGIC_9931") '
+        'or tostring(c):find("calc") then leaked=true end end\n'
+        'io.write(leaked and "LEAK" or "SAFE")\n' % path)
+    dpath = _obfuscate_path(dumper)
+    try:
+        assert _run_lua(dpath).strip().endswith("SAFE")
+    finally:
+        os.unlink(path); os.unlink(dpath)
