@@ -128,3 +128,29 @@ def _obfuscate_path(code: str) -> str:
     with os.fdopen(fd, "w") as fh:
         fh.write(code)
     return path
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua interpreter available")
+def test_vm_preserves_closures_and_multiret():
+    from obfuscator.vm import compile_chunk, emit_vm
+    from obfuscator.parser import parse
+    code = (
+        "local fns={}\n"
+        "for i=1,3 do fns[i]=function() return i end end\n"
+        "local function m() return 1,2,3 end\n"
+        "local a,b,c=m()\n"
+        "print(fns[1](),fns[2](),fns[3](),a,b,c)\n"
+    )
+    vm = emit_vm(compile_chunk(parse(code)))
+    p = _obfuscate_path(vm)
+    try:
+        assert _run_lua(p).strip() == "1\t2\t3\t1\t2\t3"
+    finally:
+        os.unlink(p)
+
+
+def test_vm_falls_back_on_goto():
+    from obfuscator.vm import compile_chunk, Unsupported
+    from obfuscator.parser import parse
+    with pytest.raises(Unsupported):
+        compile_chunk(parse("::top::\ngoto top\n"))

@@ -56,6 +56,8 @@ def build_options(tier: str, keys: set[str], seed: int | None = None) -> Options
     opt.header = HEADER_PRO if pro else HEADER_FREE
     if "antitamper" in keys:
         opt.anti_tamper = 2 if pro else 1
+    if pro and "virt" in keys:
+        opt.real_vm = True
     if pro:
         # Pro always includes a compressed base loader beneath the
         # advanced/intense layers.

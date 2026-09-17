@@ -24,6 +24,7 @@ from .transforms.optimize import optimize as optimize_pass
 from .transforms.junk import inject_junk
 from .transforms.rename import rename_locals
 from .transforms.strings import StringNames, encrypt_strings
+from .vm import Unsupported as VMUnsupported, compile_chunk, emit_vm
 
 HEADER = "--[[ Skid Optimzation v1.0]]\n"
 HEADER_FREE = "--[[ Skid Optimzation v1.5 Free]]\n"
@@ -47,6 +48,7 @@ class Options:
     junk_code: bool = False              # inject dead/decoy code
     junk_intensity: int = 1              # how much junk per block
     extra_layers: int = 0                # additional nested loader layers
+    real_vm: bool = False                # compile to a custom bytecode VM
     header: str = HEADER                 # banner comment prepended to output
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -84,6 +86,7 @@ class Options:
             anti_tamper=2,
             junk_code=True,
             junk_intensity=2,
+            real_vm=True,
             header=HEADER_PRO,
             seed=seed,
         )
@@ -112,12 +115,33 @@ class Obfuscator:
             None if seed is None else seed ^ 0x1234567)
 
     def obfuscate(self, source: str) -> str:
-        body, ok = self._transform_body(source)
+        body, ok = self._build_body(source)
         if not ok:
             self.warnings.append(
                 "source could not be fully parsed; applied packing only")
         packed = self._pack(body)
         return self.opt.header + packed
+
+    def _build_body(self, source: str) -> tuple[str, bool]:
+        if self.opt.real_vm:
+            vm = self._try_vm(source)
+            if vm is not None:
+                return vm, True
+        return self._transform_body(source)
+
+    def _try_vm(self, source: str):
+        try:
+            block = parse(source)
+        except (ParseError, LexError):
+            return None  # let _transform_body record the fallback
+        if self.opt.optimizations:
+            block = optimize_pass(block)
+        try:
+            program = compile_chunk(block)
+            return emit_vm(program)
+        except VMUnsupported as exc:
+            self.warnings.append(f"vm fallback ({exc}); used transform pipeline")
+            return None
 
     # --- AST stage --------------------------------------------------------
     def _transform_body(self, source: str) -> tuple[str, bool]:

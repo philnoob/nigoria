@@ -81,6 +81,34 @@ async def _deliver(interaction: discord.Interaction, tier: str,
     await interaction.followup.send(msg, file=file, ephemeral=True)
 
 
+async def _deliver_dm(interaction, dm, tier: str, keys: set[str],
+                     source: str) -> None:
+    """Same as _deliver but the result goes to the user's DM channel."""
+    if not source.strip():
+        await dm.send("that script's empty.")
+        return
+    if len(source) > config.MAX_SCRIPT_CHARS:
+        await dm.send(f"too big — {len(source)} chars, max {config.MAX_SCRIPT_CHARS}.")
+        return
+    if tier == "free":
+        allowed, remaining = interaction.client.usage.try_consume(interaction.user.id)
+        if not allowed:
+            await dm.send(f"out of free runs today ({config.FREE_DAILY_LIMIT}/day).")
+            return
+    else:
+        remaining = None
+    try:
+        result = await asyncio.to_thread(obfuscate_script, tier, keys, source)
+    except Exception as exc:
+        await dm.send(f"couldn't obfuscate that: `{type(exc).__name__}: {exc}`")
+        return
+    note = f"  ({remaining} left today)" if remaining is not None else ""
+    data = result.output.encode("utf-8")
+    await dm.send(
+        f"done — {result.input_size:,} -> {result.output_size:,} chars{note}",
+        file=discord.File(io.BytesIO(data), filename="obfuscated.lua"))
+
+
 class ScriptModal(discord.ui.Modal):
     def __init__(self, tier: str, keys: set[str]):
         super().__init__(title="obfuscator")
@@ -131,6 +159,9 @@ class PasteButton(discord.ui.Button):
 
 
 class UploadButton(discord.ui.Button):
+    """Discord has no file-picker component for buttons/modals, so for a locked
+    channel we take the upload in the user's DMs and reply there too."""
+
     def __init__(self, tier: str, selected: set[str]):
         super().__init__(label="upload file", style=discord.ButtonStyle.primary)
         self.tier = tier
@@ -138,47 +169,49 @@ class UploadButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         keys = set(self.selected) or default_keys(self.tier)
+        # Open a DM and prompt there (works even when the channel is locked).
+        try:
+            dm = interaction.user.dm_channel or await interaction.user.create_dm()
+            await dm.send(
+                "drop your `.lua` / `.luau` / `.txt` file right here and i'll "
+                "obfuscate it (you've got 2 minutes).")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "i can't DM you — turn on **Allow direct messages from server "
+                "members** (Privacy Settings) and hit upload again.",
+                ephemeral=True)
+            return
+
         await interaction.response.send_message(
-            "drop your `.lua` file in this channel now (you've got 60s).",
-            ephemeral=True)
+            "check your DMs — send your file there.", ephemeral=True)
 
         def check(m: discord.Message) -> bool:
             return (m.author.id == interaction.user.id
-                    and m.channel.id == interaction.channel.id
+                    and m.channel.id == dm.id
                     and bool(m.attachments))
 
         try:
             message = await interaction.client.wait_for(
-                "message", check=check, timeout=60)
+                "message", check=check, timeout=120)
         except asyncio.TimeoutError:
-            await interaction.followup.send(
-                "no file showed up in time.", ephemeral=True)
+            await dm.send("timed out — no file received. hit upload again.")
             return
 
         att = message.attachments[0]
         if not att.filename.lower().endswith((".lua", ".luau", ".txt")):
-            await interaction.followup.send(
-                "needs to be a .lua / .luau / .txt file.", ephemeral=True)
+            await dm.send("that needs to be a .lua / .luau / .txt file.")
             return
         if att.size > config.MAX_SCRIPT_CHARS * 4:
-            await interaction.followup.send("that file's too big.", ephemeral=True)
+            await dm.send("that file's too big.")
             return
-
         try:
             raw = await att.read()
             source = raw.decode("utf-8", "replace")
         except Exception as exc:
-            await interaction.followup.send(
-                f"couldn't read that file: `{exc}`", ephemeral=True)
+            await dm.send(f"couldn't read that file: `{exc}`")
             return
 
-        # Keep the channel clean — remove the upload once we've read it.
-        try:
-            await message.delete()
-        except discord.HTTPException:
-            pass
-
-        await _deliver(interaction, self.tier, keys, source)
+        await _deliver_dm(interaction, dm, self.tier, keys, source)
 
 
 class ConfigView(discord.ui.View):

@@ -27,7 +27,7 @@ so obfuscation always produces runnable output.
 | Hardcore Globals             | Every global reference is routed through a captured environment table (`ENV["print"]` …); combined with string encryption the names are hidden too. |
 | VM Compression               | Payload is LZW-compressed, ciphered, embedded in a loader that reconstructs and `loadstring`s it. |
 | Advanced VM Compression / Intense VM Structure | Additional nested loader layers, each with a distinct cipher. |
-| Virtualization               | The decode/run step is executed by a small opcode-dispatched bytecode VM. |
+| Virtualization (Pro)         | Compiles the script into a **custom bytecode VM**: a generic interpreter plus an opaque nested program table and an encrypted constant pool. Peeling the loader layers reveals opcodes referencing pool indices, not readable statements. Falls back to the transform pipeline if the script uses an unsupported construct (e.g. `goto`, string interpolation). |
 | Optimizations                | Constant folding and trivial dead-code removal. |
 | Anti Tamper                  | Self-checking loader: a builtin sanity check and a payload hash abort if the code is swapped, plus (Pro) a self-correcting cipher whose key depends on a checksum of the embedded data — editing/beautifying the payload yields garbage instead of clean source. |
 | Junk / decoy code            | Injects unused locals, decoy tables and dead functions (bounded) to grow the output and mislead deobfuscators. |
@@ -50,11 +50,14 @@ Output size overhead scales with the input (roughly proportional, not
 multiplied): a single compressed loader layer with a compact base64 payload
 keeps a large script's growth in the hundreds of KB rather than megabytes.
 
-**Honest limitation:** this is a *source* obfuscator. Its layered loaders can
-be peeled by hooking `loadstring`, which then yields the AST-obfuscated body
-(renamed, string-encrypted, globals-routed, control-flow-flattened) — hard to
-read but not impossible. True un-peelable protection requires a full custom
-bytecode VM, which this project does not implement.
+**On deobfuscation:** the layered loaders can still be peeled by hooking
+`loadstring`. With Pro Virtualization enabled and the script within the VM's
+supported subset, peeling yields a generic interpreter over an opaque bytecode
+table + encrypted constant pool (no readable names, strings, or control flow) —
+substantially harder than the earlier `ENV[dec(1)](dec(2))` output. Scripts
+outside the subset fall back to the strong transform pipeline. This is not a
+commercial-grade VM (no bytecode-level anti-debug, single interpreter shape),
+but it is a real virtualizer.
 
 ## CLI
 
@@ -72,8 +75,10 @@ python -m obfuscator.cli input.lua --base --control-flow --static-environment
 * `/quota` — show remaining Free obfuscations today.
 
 Scripts are submitted **through the panel** — either pasted (up to 4000 chars)
-or uploaded as a file (the panel's Upload button waits for you to drop a
-`.lua`/`.luau`/`.txt` file in the channel, then removes it).
+or uploaded as a file. Discord has no file-picker component for buttons, so the
+**Upload file** button opens a DM with the bot and waits for you to drop a
+`.lua`/`.luau`/`.txt` file there (this works even when the panel channel is
+locked). The obfuscated file is returned in the DM.
 * `/whitelist <user> [note] [days]` — (staff) grant a user Pro access. Blank
   `days` = lifetime. The bot also tries to assign the Pro role and posts a
   message pinging the user pointing them to the Pro panel channel (the channel
