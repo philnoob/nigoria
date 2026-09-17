@@ -89,7 +89,16 @@ local $unpack=table.unpack or unpack
 local $pack=function(...) return {n=select('#',...),...} end
 local $sbyte,$schar,$concat=string.byte,string.char,table.concat
 local $tonum=tonumber
+local $mfloor=math.floor
 local $NIL={}
+local $P2={} for i=0,32 do $P2[i]=2^i end
+local function $tou(a) return a%4294967296 end
+local function $lshift(a,n) if n<0 or n>=32 then return 0 end return ($tou(a)%$P2[32-n])*$P2[n] end
+local function $rshift(a,n) if n<0 or n>=32 then return 0 end return $mfloor($tou(a)/$P2[n]) end
+local function $bnot(a) return 4294967295-$tou(a) end
+local function $band(a,b) a=$tou(a) b=$tou(b) local r,p=0,1 for _=1,32 do local x,y=a%2,b%2 if x+y==2 then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
+local function $bor(a,b) a=$tou(a) b=$tou(b) local r,p=0,1 for _=1,32 do local x,y=a%2,b%2 if x+y>=1 then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
+local function $bxor(a,b) a=$tou(a) b=$tou(b) local r,p=0,1 for _=1,32 do local x,y=a%2,b%2 if x~=y then r=r+p end a=(a-x)/2 b=(b-y)/2 p=p*2 end return r end
 local $POOL=__POOL__
 local $IDX=__IDX__
 local $K={}
@@ -163,7 +172,7 @@ def _un_body(ops):
             f"if {_guard('u', ops.all('U_neg'))} then return -a "
             f"elseif {_guard('u', ops.all('U_not'))} then return not a "
             f"elseif {_guard('u', ops.all('U_len'))} then return #a "
-            "else return ~a end")
+            "else return $bnot(a) end")
 
 
 def _table_body(ops):
@@ -182,11 +191,11 @@ def _bin_body(ops):
     arith = [
         ("B_add", "return l+r"), ("B_sub", "return l-r"), ("B_mul", "return l*r"),
         ("B_div", "return l/r"), ("B_mod", "return l%r"), ("B_pow", "return l^r"),
-        ("B_idiv", "return l//r"), ("B_concat", "return l..r"),
+        ("B_idiv", "return $mfloor(l/r)"), ("B_concat", "return l..r"),
         ("B_eq", "return l==r"), ("B_ne", "return l~=r"), ("B_lt", "return l<r"),
         ("B_le", "return l<=r"), ("B_gt", "return l>r"), ("B_ge", "return l>=r"),
-        ("B_band", "return l&r"), ("B_bor", "return l|r"), ("B_bxor", "return l~r"),
-        ("B_shl", "return l<<r"), ("B_shr", "return l>>r"),
+        ("B_band", "return $band(l,r)"), ("B_bor", "return $bor(l,r)"), ("B_bxor", "return $bxor(l,r)"),
+        ("B_shl", "return $lshift(l,r)"), ("B_shr", "return $rshift(l,r)"),
     ]
     parts = [
         "local b=$nd[2] ",
@@ -335,6 +344,7 @@ def emit_vm(program: dict, seed: int | None = None) -> str:
         "CH", "PROTOS", "evalexpr", "evalmulti", "evallist", "runstmts",
         "makeclosure", "assign", "ismulti", "runblock", "newframe", "getlocal",
         "declare", "setex", "nd", "env", "va", "top", "EH", "SH",
+        "mfloor", "P2", "tou", "band", "bor", "bxor", "lshift", "rshift", "bnot",
     ]
     M = {n: namer.new() for n in names}
     M["stint"], M["starr"], M["stnil"] = (

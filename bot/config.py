@@ -23,7 +23,7 @@ PRO_ROLE_ID = int(os.environ.get("PRO_ROLE_ID", "1549480180672626688"))
 FREE_DAILY_LIMIT = int(os.environ.get("FREE_DAILY_LIMIT", "3"))
 
 # Largest script (characters) accepted through a paste modal or file upload.
-MAX_SCRIPT_CHARS = int(os.environ.get("MAX_SCRIPT_CHARS", "200000"))
+MAX_SCRIPT_CHARS = int(os.environ.get("MAX_SCRIPT_CHARS", "5000000"))
 
 # Where per-user daily usage is persisted.
 DATA_DIR = os.environ.get("NIGORIA_DATA_DIR",
