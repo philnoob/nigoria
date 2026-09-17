@@ -58,6 +58,7 @@ def build_options(tier: str, keys: set[str], seed: int | None = None) -> Options
         opt.anti_tamper = 2 if pro else 1
     if pro and "virt" in keys:
         opt.real_vm = True
+        opt.anti_sandbox = True
     if pro:
         # Pro always includes a compressed base loader beneath the
         # advanced/intense layers.

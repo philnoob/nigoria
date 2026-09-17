@@ -206,3 +206,28 @@ def test_loadstring_dumper_gets_only_decoys():
         assert _run_lua(dpath).strip().endswith("SAFE")
     finally:
         os.unlink(path); os.unlink(dpath)
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua interpreter available")
+def test_anti_sandbox_only_runs_in_roblox():
+    """With anti_sandbox on, the payload runs only when typeof(game)==Instance
+    (a real executor), and does nothing in a plain-Lua dumper sandbox."""
+    from bot.obfuscation_service import obfuscate_script, default_keys
+    out = obfuscate_script("pro", default_keys("pro"),
+                           'print("SANDBOX_CHECK_42")', seed=5).output
+
+    def run(prelude=""):
+        fd, p = tempfile.mkstemp(suffix=".lua")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(prelude + "\n" + out)
+        try:
+            return _run_lua(p).strip()
+        finally:
+            os.unlink(p)
+
+    # dumper sandbox: no game/typeof -> payload must NOT run
+    assert "SANDBOX_CHECK_42" not in run()
+    # real executor: game is an Instance -> payload runs
+    mock = ('typeof=function(x) return x==game and "Instance" or type(x) end '
+            'game={}')
+    assert "SANDBOX_CHECK_42" in run(mock)

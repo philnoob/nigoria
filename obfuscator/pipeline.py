@@ -54,6 +54,7 @@ class Options:
     pack_vm: bool = False                # also wrap the VM in loadstring loaders
     decoy_traps: bool = False            # plant fake loadstring calls to poison dumpers
     pad_output: bool = False             # pad output to a size scaled to the input
+    anti_sandbox: bool = False           # only run inside a real Roblox environment
     header: str = HEADER                 # banner comment prepended to output
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -190,7 +191,8 @@ class Obfuscator:
             ops = OpMap(None if seed is None else seed ^ 0x5EED)
             crng = random.Random(None if seed is None else seed ^ 0x7A5)
             program = compile_chunk(block, ops, crng)
-            return emit_vm(program, None if seed is None else seed ^ 0x11CE)
+            return emit_vm(program, None if seed is None else seed ^ 0x11CE,
+                           anti_sandbox=self.opt.anti_sandbox)
         except VMUnsupported as exc:
             self.warnings.append(f"vm fallback ({exc}); used transform pipeline")
             return None

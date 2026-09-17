@@ -146,6 +146,14 @@ end
 """)
 
 _ENTRY = Template("local $top=$newframe(nil) return $makeclosure($CH,$top)(...)\n")
+# Gated entry: only run the real program inside a genuine Roblox environment
+# (typeof(game)=="Instance"). In a dumper's plain-Lua / emulated sandbox this
+# is false, so the payload never executes and a run/trace-based dumper sees
+# nothing. Real executors always provide game as an Instance.
+_ENTRY_GATED = Template(
+    "local $top=$newframe(nil) "
+    "if typeof and typeof(game)==\"Instance\" then "
+    "return $makeclosure($CH,$top)(...) end\n")
 
 
 # --- arm bodies (shared by both architectures) -----------------------------
@@ -335,7 +343,8 @@ def _archB_stmt(arms, ops, rng, namer):
     return "".join(lines)
 
 
-def emit_vm(program: dict, seed: int | None = None) -> str:
+def emit_vm(program: dict, seed: int | None = None,
+            anti_sandbox: bool = False) -> str:
     rng = random.Random(seed)
     ops = program["_ops"]
     namer = _Namer(rng)
@@ -382,7 +391,7 @@ def emit_vm(program: dict, seed: int | None = None) -> str:
     raw_body = (_SCAFFOLD.template
                 + _multi_and_assign(ops)
                 + expr_code + stmt_code
-                + _ENTRY.template)
+                + (_ENTRY_GATED if anti_sandbox else _ENTRY).template)
     body = Template(raw_body).substitute(M)
     body = (body.replace("__POOL__", pool_lit)
                 .replace("__IDX__", idx_lit)
