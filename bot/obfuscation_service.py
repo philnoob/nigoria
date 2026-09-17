@@ -5,27 +5,29 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from obfuscator.pipeline import Obfuscator, Options
+from obfuscator.pipeline import Obfuscator, Options, HEADER_FREE, HEADER_PRO
 
 
 # The option catalogues shown in each panel. Each entry:
 #   (key, label, default_selected)
 FREE_OPTIONS = [
-    ("base",   "Base Obfuscation", True),
-    ("cflow",  "Control Flow",     True),
-    ("vmcomp", "VM Compression",   True),
-    ("opt",    "Optimization (optional)", False),
+    ("base",       "Base Obfuscation", True),
+    ("cflow",      "Control Flow",     True),
+    ("vmcomp",     "VM Compression",   True),
+    ("antitamper", "Anti Tamper (mid)", True),
+    ("opt",        "Optimization (optional)", False),
 ]
 
 PRO_OPTIONS = [
-    ("base",    "Good Obfuscation",        True),
-    ("static",  "Static Environment",      True),
-    ("globals", "Hardcore Globals",        True),
-    ("intense", "Intense VM Structure",    True),
-    ("advcomp", "Advanced VM Compression", True),
-    ("cflow",   "Control Flow",            True),
-    ("virt",    "Virtualization",          True),
-    ("opt",     "Optimizations",           False),
+    ("base",       "Good Obfuscation",        True),
+    ("static",     "Static Environment",      True),
+    ("globals",    "Hardcore Globals",        True),
+    ("antitamper", "Anti Tamper",             True),
+    ("intense",    "Intense VM Structure",    True),
+    ("advcomp",    "Advanced VM Compression", True),
+    ("cflow",      "Control Flow",            True),
+    ("virt",       "Virtualization",          True),
+    ("opt",        "Optimizations",           False),
 ]
 
 
@@ -46,9 +48,15 @@ def build_options(tier: str, keys: set[str], seed: int | None = None) -> Options
         optimizations="opt" in keys,
         vm_compression="vmcomp" in keys,
         number_intensity=3 if tier == "pro" else 2,
+        junk_code=True,
+        junk_intensity=2 if tier == "pro" else 1,
         seed=seed,
     )
-    if tier == "pro":
+    pro = tier == "pro"
+    opt.header = HEADER_PRO if pro else HEADER_FREE
+    if "antitamper" in keys:
+        opt.anti_tamper = 2 if pro else 1
+    if pro:
         # Pro always includes a compressed base loader beneath the
         # advanced/intense layers.
         opt.vm_compression = True

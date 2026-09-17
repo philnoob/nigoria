@@ -65,7 +65,9 @@ def test_behaviour_preserved(name):
 
 def test_header_present():
     out = Obfuscator(Options.free(seed=1)).obfuscate("print(1)")
-    assert out.startswith("--[[ Skid Optimzation v1.0]]")
+    assert out.startswith("--[[ Skid Optimzation v1.5 Free]]")
+    out = Obfuscator(Options.pro(seed=1)).obfuscate("print(1)")
+    assert out.startswith("--[[ Skid Optimzation v2.0 Pro]]")
 
 
 def test_lzw_roundtrip_reference():
@@ -94,3 +96,35 @@ def test_lzw_roundtrip_reference():
 
     for data in [b"", b"a", b"abcabcabc", bytes(range(256)) * 100]:
         assert decompress(lzw_compress(data)) == data
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua interpreter available")
+@pytest.mark.parametrize("preset", ["free", "pro"])
+def test_anti_tamper_hides_payload(preset):
+    import re
+    opt = Options.free(seed=5) if preset == "free" else Options.pro(seed=5)
+    out = Obfuscator(opt).obfuscate('print("SECRET_OK_12345")')
+    # sanity: clean output runs and prints the secret
+    p = _obfuscate_path(out)
+    try:
+        assert "SECRET_OK_12345" in _run_lua(p)
+    finally:
+        os.unlink(p)
+    # tamper the largest embedded string (the pool) and confirm the secret
+    # never surfaces
+    longest = max(re.finditer(r'"((?:[^"\\]|\\.){40,})"', out),
+                  key=lambda m: len(m.group(1)))
+    mid = (longest.start(1) + longest.end(1)) // 2
+    tampered = out[:mid] + ("X" if out[mid] != "X" else "Y") + out[mid + 1:]
+    p = _obfuscate_path(tampered)
+    try:
+        assert "SECRET_OK_12345" not in _run_lua(p)
+    finally:
+        os.unlink(p)
+
+
+def _obfuscate_path(code: str) -> str:
+    fd, path = tempfile.mkstemp(suffix=".lua")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(code)
+    return path

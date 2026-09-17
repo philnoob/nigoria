@@ -29,17 +29,32 @@ so obfuscation always produces runnable output.
 | Advanced VM Compression / Intense VM Structure | Additional nested loader layers, each with a distinct cipher. |
 | Virtualization               | The decode/run step is executed by a small opcode-dispatched bytecode VM. |
 | Optimizations                | Constant folding and trivial dead-code removal. |
+| Anti Tamper                  | Self-checking loader: a builtin sanity check and a payload hash abort if the code is swapped, plus (Pro) a self-correcting cipher whose key depends on a checksum of the embedded data — editing/beautifying the payload yields garbage instead of clean source. |
+| Junk / decoy code            | Injects unused locals, decoy tables and dead functions (bounded) to grow the output and mislead deobfuscators. |
 
 > This is obfuscation, not cryptography. The goal is to make scripts hard to
 > read and tamper with, not to provide secrecy against a determined analyst.
 
 ### Tiers
 
-* **Free:** Base Obfuscation, Control Flow, VM Compression, and optional
+* **Free** (`--[[ Skid Optimzation v1.5 Free]]`): Base Obfuscation, Control
+  Flow, VM Compression, a mid Anti Tamper, light junk, and optional
   Optimization. Limited to **3 obfuscations per day** per user.
-* **Pro:** Good Obfuscation, Static Environment, Hardcore Globals, Intense VM
-  Structure, Advanced VM Compression, Control Flow, plus optional
-  Virtualization and Optimizations. Unlimited. Requires the Pro role.
+* **Pro** (`--[[ Skid Optimzation v2.0 Pro]]`): Good Obfuscation, Static
+  Environment, Hardcore Globals, strong self-correcting Anti Tamper, Intense VM
+  Structure, Advanced VM Compression, Control Flow, more junk, deeper number
+  obfuscation, plus Virtualization and optional Optimizations. Unlimited.
+  Requires Pro access.
+
+Output size overhead scales with the input (roughly proportional, not
+multiplied): a single compressed loader layer with a compact base64 payload
+keeps a large script's growth in the hundreds of KB rather than megabytes.
+
+**Honest limitation:** this is a *source* obfuscator. Its layered loaders can
+be peeled by hooking `loadstring`, which then yields the AST-obfuscated body
+(renamed, string-encrypted, globals-routed, control-flow-flattened) — hard to
+read but not impossible. True un-peelable protection requires a full custom
+bytecode VM, which this project does not implement.
 
 ## CLI
 

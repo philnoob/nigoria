@@ -21,10 +21,13 @@ from .transforms.controlflow import flatten
 from .transforms.globalscope import harden_globals
 from .transforms.numbers import obfuscate_numbers
 from .transforms.optimize import optimize as optimize_pass
+from .transforms.junk import inject_junk
 from .transforms.rename import rename_locals
 from .transforms.strings import StringNames, encrypt_strings
 
 HEADER = "--[[ Skid Optimzation v1.0]]\n"
+HEADER_FREE = "--[[ Skid Optimzation v1.5 Free]]\n"
+HEADER_PRO = "--[[ Skid Optimzation v2.0 Pro]]\n"
 
 
 @dataclass
@@ -40,6 +43,11 @@ class Options:
     virtualization: bool = False        # opcode-dispatch VM wrapper
     optimizations: bool = False         # constant folding / dead code
     number_intensity: int = 1           # depth of numeric-literal obfuscation
+    anti_tamper: int = 0                 # 0 none, 1 basic, 2 self-corrupting
+    junk_code: bool = False              # inject dead/decoy code
+    junk_intensity: int = 1              # how much junk per block
+    extra_layers: int = 0                # additional nested loader layers
+    header: str = HEADER                 # banner comment prepended to output
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -52,6 +60,10 @@ class Options:
             vm_compression=True,
             optimizations=optimizations,
             number_intensity=2,
+            anti_tamper=1,
+            junk_code=True,
+            junk_intensity=1,
+            header=HEADER_FREE,
             seed=seed,
         )
 
@@ -69,18 +81,22 @@ class Options:
             virtualization=virtualization,
             optimizations=optimizations,
             number_intensity=3,
+            anti_tamper=2,
+            junk_code=True,
+            junk_intensity=2,
+            header=HEADER_PRO,
             seed=seed,
         )
 
     def layer_count(self) -> int:
-        layers = 0
-        if self.vm_compression:
-            layers += 1
-        if self.advanced_vm_compression:
-            layers += 1
-        if self.intense_vm_structure:
-            layers += 1
-        return layers
+        # One compression layer if any VM/compression option is on; the
+        # "intense" option adds a single extra nested layer (Pro = 2 total).
+        # "advanced" just keeps compression on and does not multiply size.
+        any_pack = (self.vm_compression or self.advanced_vm_compression
+                    or self.intense_vm_structure)
+        layers = 1 if any_pack else 0
+        layers += max(0, self.extra_layers)
+        return min(layers, 2)
 
 
 class Obfuscator:
@@ -101,7 +117,7 @@ class Obfuscator:
             self.warnings.append(
                 "source could not be fully parsed; applied packing only")
         packed = self._pack(body)
-        return HEADER + packed
+        return self.opt.header + packed
 
     # --- AST stage --------------------------------------------------------
     def _transform_body(self, source: str) -> tuple[str, bool]:
@@ -152,6 +168,10 @@ class Obfuscator:
                 # encrypted). Decoder preamble goes closest to the body.
                 preambles.append(pre)
 
+        if self.opt.junk_code:
+            block = inject_junk(block, self.preamble_namer, self.rng,
+                                intensity=self.opt.junk_intensity)
+
         core = generate(block, indent="")
         return "".join(preambles) + core, True
 
@@ -167,7 +187,10 @@ class Obfuscator:
             body,
             rng=self.rng,
             layers=layers,
-            virtualize=self.opt.virtualization,
+            virtualize=self.opt.virtualization or self.opt.intense_vm_structure,
+            anti_tamper=self.opt.anti_tamper,
+            junk=self.opt.junk_code,
+            junk_intensity=self.opt.junk_intensity,
             seed=None if seed is None else seed ^ 0xABCDEF,
         )
 

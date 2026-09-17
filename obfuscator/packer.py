@@ -12,6 +12,8 @@ table.concat), so packed output runs under executors.
 
 from __future__ import annotations
 
+import base64
+
 from .luastr import compact_lua_bytes as _compact_lua_bytes
 from .namegen import PreambleNamer
 
@@ -76,8 +78,52 @@ def _decomp_fn(name: str, sbyte: str, schar: str) -> str:
     )
 
 
+def _b64_decode_fn(name: str) -> str:
+    return (
+        f"local function {name}(data)"
+        "local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';"
+        "local lut={};for i=1,#b do lut[string.byte(b,i)]=i-1 end;"
+        "local out={};local n=0;local bits=0;local nb=0;"
+        "for i=1,#data do local v=lut[string.byte(data,i)];"
+        "if v then bits=bits*64+v;nb=nb+6;"
+        "if nb>=8 then nb=nb-8;local p=2^nb;"
+        "n=n+1;out[n]=string.char(math.floor(bits/p)%256);bits=bits%p end end end;"
+        "return table.concat(out) end;"
+    )
+
+
+def _payload_hash(data: bytes) -> int:
+    h = 0
+    for b in data:
+        h = (h * 31 + b) % 4294967296
+    return h
+
+
+def _pool_checksum(data: bytes) -> int:
+    return sum(data) % 16777216
+
+
+def _loader_junk(namer: PreambleNamer, rng, count: int) -> str:
+    out = []
+    for _ in range(count):
+        nm = namer.new()
+        r = rng.randint(0, 2)
+        if r == 0:
+            val = str(rng.randint(1, 10 ** 9))
+        elif r == 1:
+            body = "".join(rng.choice("abcdef0123456789_")
+                           for _ in range(rng.randint(6, 20)))
+            val = '"' + body + '"'
+        else:
+            val = "{" + ",".join(str(rng.randint(0, 255))
+                                 for _ in range(rng.randint(2, 6))) + "}"
+        out.append(f"local {nm}={val};")
+    return "".join(out)
+
+
 def build_loader(payload_src: str, namer: PreambleNamer, rng,
-                 virtualize: bool = False) -> str:
+                 virtualize: bool = False, anti_tamper: int = 0,
+                 junk: bool = False, junk_intensity: int = 1) -> str:
     """Wrap ``payload_src`` in one loader layer and return Lua source."""
     data = payload_src.encode("utf-8", "surrogatepass")
     comp = lzw_compress(data)
@@ -94,23 +140,66 @@ def build_loader(payload_src: str, namer: PreambleNamer, rng,
     n_sb = namer.new()
     n_sc = namer.new()
 
-    pool_lit = _byte_literal(ciphered)
-    parts = [
+    b64 = base64.b64encode(ciphered).decode("ascii")
+    pool_lit = '"' + b64 + '"'          # base64 text: compact and Lua-safe
+    n_b64 = namer.new()
+    n_raw = namer.new()
+    parts = []
+    if junk:
+        parts.append(_loader_junk(namer, rng, 2 + junk_intensity * 2))
+    parts += [
         f"local {n_sb}=string.byte;local {n_sc}=string.char;",
+        _b64_decode_fn(n_b64),
         _decomp_fn(n_decomp, n_sb, n_sc),
         f"local {n_pool}={pool_lit};",
         f"local {n_load}=loadstring or load;",
     ]
+    if junk:
+        parts.append(_loader_junk(namer, rng, 1 + junk_intensity))
 
-    decode_and_run = (
+    # Which seed expression the decode uses.
+    if anti_tamper >= 2:
+        # Self-correcting: the runtime checksum of the base64 pool text must
+        # match the embedded one or the derived seed is wrong and the payload
+        # decodes to garbage.
+        n_chk = namer.new()
+        n_ds = namer.new()
+        exp_chk = sum(b64.encode("ascii")) % 16777216
+        seed_expr = n_ds
+        pre_decode = (
+            f"local {n_chk}=0;"
+            f"for j=1,#{n_pool} do {n_chk}=({n_chk}+{n_sb}({n_pool},j))%16777216 end;"
+            f"local {n_ds}={seed}+({n_chk}-{exp_chk});"
+        )
+    else:
+        seed_expr = str(seed)
+        pre_decode = ""
+
+    decode = (
+        f"local {n_raw}={n_b64}({n_pool});"
+        f"{pre_decode}"
         f"local {n_dec}={{}};"
-        f"for j=1,#{n_pool} do "
-        f"{n_dec}[j]={n_sc}(({n_sb}({n_pool},j)-(({seed}+j*{step})%256))%256);"
+        f"for j=1,#{n_raw} do "
+        f"{n_dec}[j]={n_sc}(({n_sb}({n_raw},j)-((({seed_expr})+j*{step})%256))%256);"
         f"end;"
         f"local {n_comp}=table.concat({n_dec});"
         f"local {n_src}={n_decomp}({n_comp});"
-        f"return {n_load}({n_src})(...);"
     )
+
+    if anti_tamper >= 1:
+        n_h = namer.new()
+        exp_hash = _payload_hash(data)
+        check = (
+            f"local {n_h}=0;"
+            f"for j=1,#{n_src} do {n_h}=({n_h}*31+{n_sb}({n_src},j))%4294967296 end;"
+            f"if {n_h}~={exp_hash} then return end;"
+            f"if {n_sb}(\"A\")~=65 or {n_sc}(65)~=\"A\" then return end;"
+        )
+    else:
+        check = ""
+
+    run = f"return {n_load}({n_src})(...);"
+    decode_and_run = decode + check + run
 
     if virtualize:
         parts.append(_virtual_wrapper(decode_and_run, namer))
@@ -121,18 +210,11 @@ def build_loader(payload_src: str, namer: PreambleNamer, rng,
 
 
 def _virtual_wrapper(inner_body: str, namer: PreambleNamer) -> str:
-    """Express the decode/run step as a tiny opcode-dispatched VM.
-
-    The body is compiled to a one-instruction "thunk" program executed by a
-    dispatch loop. It is a real (if small) bytecode interpreter: the control
-    flow that reconstructs and launches the payload runs through the VM's
-    fetch/decode/execute loop rather than as straight-line code.
-    """
+    """Express the decode/run step as a tiny opcode-dispatched VM."""
     vm_ip = namer.new()
     vm_prog = namer.new()
     vm_thunk = namer.new()
     vm_pc = namer.new()
-    # Opcode 1 = execute thunk and halt. The program is a table of opcodes.
     return (
         f"local {vm_thunk}=function(...) {inner_body} end;"
         f"local {vm_prog}={{1}};"
@@ -146,13 +228,15 @@ def _virtual_wrapper(inner_body: str, namer: PreambleNamer) -> str:
 
 
 def pack(payload_src: str, rng, layers: int = 1, virtualize: bool = False,
+         anti_tamper: int = 0, junk: bool = False, junk_intensity: int = 1,
          seed: int | None = None) -> str:
     """Pack ``payload_src`` through ``layers`` nested loaders."""
     namer = PreambleNamer(seed)
     src = payload_src
-    for depth in range(max(1, layers)):
-        # Only the outermost (last) layer carries the VM wrapper by default,
-        # keeping nesting cost bounded while still showcasing virtualization.
+    layers = max(1, layers)
+    for depth in range(layers):
         use_vm = virtualize and depth == layers - 1
-        src = build_loader(src, namer, rng, virtualize=use_vm)
+        src = build_loader(src, namer, rng, virtualize=use_vm,
+                           anti_tamper=anti_tamper, junk=junk,
+                           junk_intensity=junk_intensity)
     return src

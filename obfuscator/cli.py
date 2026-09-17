@@ -29,6 +29,9 @@ def build_options(ns: argparse.Namespace) -> Options:
         intense_vm_structure=ns.intense_vm_structure,
         virtualization=ns.virtualization,
         optimizations=ns.optimizations,
+        anti_tamper=ns.anti_tamper,
+        junk_code=ns.junk,
+        extra_layers=ns.extra_layers,
         seed=ns.seed,
     )
 
@@ -47,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--intense-vm-structure", action="store_true")
     p.add_argument("--virtualization", action="store_true")
     p.add_argument("--optimizations", action="store_true")
+    p.add_argument("--anti-tamper", type=int, default=0, choices=[0, 1, 2],
+                   help="0 none, 1 basic, 2 self-corrupting")
+    p.add_argument("--junk", action="store_true", help="inject decoy code")
+    p.add_argument("--extra-layers", type=int, default=0)
     p.add_argument("--seed", type=int, default=None)
     ns = p.parse_args(argv)
 
