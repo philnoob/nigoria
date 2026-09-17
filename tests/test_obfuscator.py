@@ -103,6 +103,7 @@ def test_lzw_roundtrip_reference():
 def test_anti_tamper_hides_payload(preset):
     import re
     opt = Options.free(seed=5) if preset == "free" else Options.pro(seed=5)
+    opt.pad_output = False  # padding would otherwise be the largest string
     out = Obfuscator(opt).obfuscate('print("SECRET_OK_12345")')
     # sanity: clean output runs and prints the secret
     p = _obfuscate_path(out)
@@ -110,8 +111,8 @@ def test_anti_tamper_hides_payload(preset):
         assert "SECRET_OK_12345" in _run_lua(p)
     finally:
         os.unlink(p)
-    # tamper the largest embedded string (the pool) and confirm the secret
-    # never surfaces
+    # tamper the largest embedded string (the encoded pool / stream) and
+    # confirm the secret never surfaces
     longest = max(re.finditer(r'"((?:[^"\\]|\\.){40,})"', out),
                   key=lambda m: len(m.group(1)))
     mid = (longest.start(1) + longest.end(1)) // 2

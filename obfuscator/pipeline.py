@@ -9,6 +9,7 @@ packed, so obfuscation always produces runnable output.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 
 from . import ast_nodes as A
@@ -52,6 +53,7 @@ class Options:
     real_vm: bool = False                # compile to a custom bytecode VM
     pack_vm: bool = False                # also wrap the VM in loadstring loaders
     decoy_traps: bool = False            # plant fake loadstring calls to poison dumpers
+    pad_output: bool = False             # pad output to a size scaled to the input
     header: str = HEADER                 # banner comment prepended to output
     seed: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -65,6 +67,7 @@ class Options:
             vm_compression=True,
             optimizations=optimizations,
             number_intensity=2,
+            pad_output=True,
             anti_tamper=1,
             junk_code=True,
             junk_intensity=1,
@@ -91,6 +94,7 @@ class Options:
             junk_intensity=2,
             real_vm=True,
             decoy_traps=True,
+            pad_output=True,
             header=HEADER_PRO,
             seed=seed,
         )
@@ -132,9 +136,35 @@ class Obfuscator:
             if self.opt.decoy_traps:
                 body = decoy_traps(self.preamble_namer, self.rng,
                                    count=self.rng.randint(3, 6)) + body
-            return self.opt.header + body
-        packed = self._pack(body)
-        return self.opt.header + packed
+            code = body
+        else:
+            code = self._pack(body)
+        return self._finalize(code, len(source))
+
+    # --- output shaping ---------------------------------------------------
+    def _finalize(self, code: str, input_len: int) -> str:
+        # Collapse to a single line (no line comments are ever emitted, so
+        # replacing newlines with spaces stays valid Lua).
+        code = re.sub(r"[\r\n]+", " ", code).strip()
+        header = self.opt.header
+        if not header.endswith("\n"):
+            header = header + "\n"
+        if self.opt.pad_output:
+            code = self._pad(code, input_len, len(header))
+        return header + code
+
+    def _pad(self, code: str, input_len: int, header_len: int) -> str:
+        # Target grows with the input: ~+180 KB at 1 KB, ~+650 KB at 180 KB.
+        target = int(177374 + 3.5642 * input_len)
+        name = self.preamble_namer.new()
+        overhead = len(f"local {name}=\"\";")
+        need = target - header_len - len(code) - overhead
+        if need <= 0:
+            return code
+        alphabet = ("abcdefghijklmnopqrstuvwxyz"
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        content = "".join(random.choices(alphabet, k=need))
+        return f"local {name}=\"{content}\";" + code
 
     def _build_body(self, source: str) -> tuple[str, bool]:
         if self.opt.real_vm:
