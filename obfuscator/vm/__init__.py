@@ -9,5 +9,6 @@ fall back to the plain-transform path and never break a script.
 
 from .compiler import Unsupported, compile_chunk
 from .emitter import emit_vm
+from .opcodes import OpMap
 
-__all__ = ["Unsupported", "compile_chunk", "emit_vm"]
+__all__ = ["Unsupported", "compile_chunk", "emit_vm", "OpMap"]

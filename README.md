@@ -27,7 +27,7 @@ so obfuscation always produces runnable output.
 | Hardcore Globals             | Every global reference is routed through a captured environment table (`ENV["print"]` …); combined with string encryption the names are hidden too. |
 | VM Compression               | Payload is LZW-compressed, ciphered, embedded in a loader that reconstructs and `loadstring`s it. |
 | Advanced VM Compression / Intense VM Structure | Additional nested loader layers, each with a distinct cipher. |
-| Virtualization (Pro)         | Compiles the script into a **custom bytecode VM**: a generic interpreter plus an opaque nested program table and an encrypted constant pool. Peeling the loader layers reveals opcodes referencing pool indices, not readable statements. Falls back to the transform pipeline if the script uses an unsupported construct (e.g. `goto`, string interpolation). |
+| Virtualization (Pro)         | Compiles the script into a **polymorphic custom bytecode VM**. Every build randomizes the opcode numbers, all interpreter identifiers, the dispatch order, and the cipher parameters, and the program is serialized to an **encrypted flat bytecode stream** (no readable tables). Because the layout differs every build, a devirtualizer written for one output does not work on the next. Uses table-based frames, so it also runs scripts past Lua's 200-local limit. Falls back to the transform pipeline for unsupported constructs (`goto`, string interpolation). |
 | Optimizations                | Constant folding and trivial dead-code removal. |
 | Anti Tamper                  | Self-checking loader: a builtin sanity check and a payload hash abort if the code is swapped, plus (Pro) a self-correcting cipher whose key depends on a checksum of the embedded data — editing/beautifying the payload yields garbage instead of clean source. |
 | Junk / decoy code            | Injects unused locals, decoy tables and dead functions (bounded) to grow the output and mislead deobfuscators. |
@@ -51,13 +51,17 @@ multiplied): a single compressed loader layer with a compact base64 payload
 keeps a large script's growth in the hundreds of KB rather than megabytes.
 
 **On deobfuscation:** the layered loaders can still be peeled by hooking
-`loadstring`. With Pro Virtualization enabled and the script within the VM's
-supported subset, peeling yields a generic interpreter over an opaque bytecode
-table + encrypted constant pool (no readable names, strings, or control flow) —
-substantially harder than the earlier `ENV[dec(1)](dec(2))` output. Scripts
-outside the subset fall back to the strong transform pipeline. This is not a
-commercial-grade VM (no bytecode-level anti-debug, single interpreter shape),
-but it is a real virtualizer.
+`loadstring`, but with Pro Virtualization enabled that only reveals a
+*polymorphic* interpreter over an encrypted bytecode stream and encrypted
+constant pool. To recover the original a reverser must, **per build**: peel the
+self-correcting anti-tamper loaders, identify this build's randomized opcode
+map, decrypt the bytecode stream and constant pool (per-build ciphers), and
+reconstruct the AST — and a tool built for one output does not transfer to the
+next because every symbol, name and cipher is randomized. This is a real
+virtualizer, not literally unbreakable (a determined expert can still trace one
+interpreter by hand), but there is no reusable one-click devirtualizer.
+Scripts outside the VM's supported subset fall back to the strong transform
+pipeline.
 
 ## CLI
 

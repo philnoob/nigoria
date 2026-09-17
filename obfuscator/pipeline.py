@@ -24,7 +24,7 @@ from .transforms.optimize import optimize as optimize_pass
 from .transforms.junk import inject_junk
 from .transforms.rename import rename_locals
 from .transforms.strings import StringNames, encrypt_strings
-from .vm import Unsupported as VMUnsupported, compile_chunk, emit_vm
+from .vm import Unsupported as VMUnsupported, compile_chunk, emit_vm, OpMap
 
 HEADER = "--[[ Skid Optimzation v1.0]]\n"
 HEADER_FREE = "--[[ Skid Optimzation v1.5 Free]]\n"
@@ -137,8 +137,10 @@ class Obfuscator:
         if self.opt.optimizations:
             block = optimize_pass(block)
         try:
-            program = compile_chunk(block)
-            return emit_vm(program)
+            seed = self.opt.seed
+            ops = OpMap(None if seed is None else seed ^ 0x5EED)
+            program = compile_chunk(block, ops)
+            return emit_vm(program, None if seed is None else seed ^ 0x11CE)
         except VMUnsupported as exc:
             self.warnings.append(f"vm fallback ({exc}); used transform pipeline")
             return None

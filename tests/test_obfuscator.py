@@ -154,3 +154,30 @@ def test_vm_falls_back_on_goto():
     from obfuscator.parser import parse
     with pytest.raises(Unsupported):
         compile_chunk(parse("::top::\ngoto top\n"))
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua interpreter available")
+@pytest.mark.parametrize("seed", [1, 2, 3, 7, 99])
+def test_vm_polymorphic_seeds_preserve_behaviour(seed):
+    """Each seed produces a different interpreter/opcode layout but the same
+    runtime behaviour."""
+    from obfuscator.vm import compile_chunk, emit_vm, OpMap
+    from obfuscator.parser import parse
+    code = (
+        "local f={} for i=1,3 do f[i]=function() return i*i end end\n"
+        "local function sum(t) local s=0 for _,v in ipairs(t) do s=s+v end return s end\n"
+        "local o=setmetatable({n=1},{__index=function(_,k) return k end})\n"
+        "print(f[1](),f[2](),f[3](),sum({f[1](),f[2](),f[3]()}),o.zzz,o.n)\n"
+    )
+    vm = emit_vm(compile_chunk(parse(code), OpMap(seed)), seed)
+    p = _obfuscate_path(vm)
+    try:
+        assert _run_lua(p).strip() == "1\t4\t9\t14\tzzz\t1"
+    finally:
+        os.unlink(p)
+
+
+def test_two_pro_builds_differ():
+    a = Obfuscator(Options.pro(seed=1)).obfuscate('print("hi")')
+    b = Obfuscator(Options.pro(seed=2)).obfuscate('print("hi")')
+    assert a != b  # polymorphic: no two builds share a layout
