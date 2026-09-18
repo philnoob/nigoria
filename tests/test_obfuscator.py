@@ -225,9 +225,26 @@ def test_anti_sandbox_only_runs_in_roblox():
         finally:
             os.unlink(p)
 
-    # dumper sandbox: no game/typeof -> payload must NOT run
+    # 1) plain dumper sandbox: no game/typeof -> payload must NOT run
     assert "SANDBOX_CHECK_42" not in run()
-    # real executor: game is an Instance -> payload runs
-    mock = ('typeof=function(x) return x==game and "Instance" or type(x) end '
-            'game={}')
-    assert "SANDBOX_CHECK_42" in run(mock)
+
+    # 2) real executor: game is userdata-like (rawget errors), typeof==Instance
+    real = (
+        'local _raw=rawget '
+        'game=setmetatable({},{__index=function(_,k) return nil end}) '
+        'typeof=function(x) if x==game then return "Instance" end return type(x) end '
+        'rawget=function(t,k) if t==game then '
+        'error("table expected, got userdata") end return _raw(t,k) end')
+    assert "SANDBOX_CHECK_42" in run(real)
+
+    # 3) RevealR-style env logger: game is a real TABLE proxy, typeof faked to
+    # "Instance", but rawget (using the real type) succeeds on a table -> the
+    # gate detects the fake and the payload must NOT run
+    revealr = (
+        'local _raw=rawget '
+        'game=setmetatable({},{__index=function(_,k) return nil end}) '
+        'typeof=function(x) if type(x)=="table" then return "Instance" end '
+        'return type(x) end '
+        'rawget=function(t,k) if type(t)~="table" then error("table expected") '
+        'end return _raw(t,k) end')
+    assert "SANDBOX_CHECK_42" not in run(revealr)

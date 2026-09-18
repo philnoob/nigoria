@@ -152,7 +152,11 @@ _ENTRY = Template("local $top=$newframe(nil) return $makeclosure($CH,$top)(...)\
 # nothing. Real executors always provide game as an Instance.
 _ENTRY_GATED = Template(
     "local $top=$newframe(nil) "
-    "if typeof and typeof(game)==\"Instance\" then "
+    # Real Roblox: game is a locked userdata Instance -> typeof=="Instance"
+    # AND rawget(game,...) ERRORS (rawget needs a table). Env loggers (RevealR
+    # etc.) proxy game as a plain table, so their rawget succeeds -> detected.
+    "if typeof and typeof(game)==\"Instance\" "
+    "and not pcall(rawget,game,\"\\0\") then "
     "return $makeclosure($CH,$top)(...) end\n")
 
 
