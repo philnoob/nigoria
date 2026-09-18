@@ -146,18 +146,29 @@ end
 """)
 
 _ENTRY = Template("local $top=$newframe(nil) return $makeclosure($CH,$top)(...)\n")
-# Gated entry: only run the real program inside a genuine Roblox environment
-# (typeof(game)=="Instance"). In a dumper's plain-Lua / emulated sandbox this
-# is false, so the payload never executes and a run/trace-based dumper sees
-# nothing. Real executors always provide game as an Instance.
-_ENTRY_GATED = Template(
-    "local $top=$newframe(nil) "
-    # Real Roblox: game is a locked userdata Instance -> typeof=="Instance"
-    # AND rawget(game,...) ERRORS (rawget needs a table). Env loggers (RevealR
-    # etc.) proxy game as a plain table, so their rawget succeeds -> detected.
-    "if typeof and typeof(game)==\"Instance\" "
-    "and not pcall(rawget,game,\"\\0\") then "
-    "return $makeclosure($CH,$top)(...) end\n")
+
+# Conditions that must hold for the real program to run. Each is an expression
+# that is TRUE in a genuine executor and FALSE under a dumper/tracer.
+#   anti_sandbox: real Roblox game is locked userdata -> typeof=="Instance" and
+#     rawget(game,...) ERRORS. Env loggers proxy game as a plain table, so their
+#     rawget succeeds -> detected.
+#   anti_debug: no instruction-level debug hook is installed (VM tracers such as
+#     FiOne/rerubi-style instrumentation set one).
+_COND_SANDBOX = ('typeof and typeof(game)=="Instance" '
+                 'and not pcall(rawget,game,"\\0")')
+_COND_DEBUG = 'not (debug and debug.gethook and debug.gethook())'
+
+
+def _build_entry(anti_sandbox: bool, anti_debug: bool) -> str:
+    conds = []
+    if anti_sandbox:
+        conds.append(_COND_SANDBOX)
+    if anti_debug:
+        conds.append(_COND_DEBUG)
+    if not conds:
+        return "local $top=$newframe(nil) return $makeclosure($CH,$top)(...)\n"
+    return ("local $top=$newframe(nil) if " + " and ".join(conds)
+            + " then return $makeclosure($CH,$top)(...) end\n")
 
 
 # --- arm bodies (shared by both architectures) -----------------------------
@@ -348,7 +359,7 @@ def _archB_stmt(arms, ops, rng, namer):
 
 
 def emit_vm(program: dict, seed: int | None = None,
-            anti_sandbox: bool = False) -> str:
+            anti_sandbox: bool = False, anti_debug: bool = False) -> str:
     rng = random.Random(seed)
     ops = program["_ops"]
     namer = _Namer(rng)
@@ -395,7 +406,7 @@ def emit_vm(program: dict, seed: int | None = None,
     raw_body = (_SCAFFOLD.template
                 + _multi_and_assign(ops)
                 + expr_code + stmt_code
-                + (_ENTRY_GATED if anti_sandbox else _ENTRY).template)
+                + _build_entry(anti_sandbox, anti_debug))
     body = Template(raw_body).substitute(M)
     body = (body.replace("__POOL__", pool_lit)
                 .replace("__IDX__", idx_lit)

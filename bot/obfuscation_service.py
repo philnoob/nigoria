@@ -27,6 +27,7 @@ PRO_OPTIONS = [
     ("advcomp",    "Advanced VM Compression", True),
     ("cflow",      "Control Flow",            True),
     ("virt",       "Virtualization",          True),
+    ("antidebug",  "Anti Debug (may reduce executor compat)", False),
     ("opt",        "Optimizations",           False),
 ]
 
@@ -59,6 +60,8 @@ def build_options(tier: str, keys: set[str], seed: int | None = None) -> Options
     if pro and "virt" in keys:
         opt.real_vm = True
         opt.anti_sandbox = True
+    if pro and "antidebug" in keys:
+        opt.anti_debug = True
     if pro:
         # Pro always includes a compressed base loader beneath the
         # advanced/intense layers.
